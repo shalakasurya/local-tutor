@@ -1715,3 +1715,33 @@ button {
   font-size: 13px;
   color: var(--text);
 }
+
+/* Interview scope toggle: this session vs all sessions */
+.interviews-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.interviews-scope {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #2c313a;
+}
+.interviews-scope-btn {
+  background: transparent;
+  border: 1px solid #2c313a;
+  color: #9aa3af;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.interviews-scope-btn:hover {
+  color: #e6e8eb;
+}
+.interviews-scope-active {
+  background: #2c313a;
+  color: #e6e8eb;
+}

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Interview } from '../../../shared/types'
 
@@ -5,6 +6,8 @@ interface InterviewsPaneProps {
   interviews: Interview[]
   selectedId: string | null
   onSelect: (id: string | null) => void
+  /** Active session id — used to scope the list to the current session by default. */
+  sessionId: string | null
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -135,25 +138,58 @@ function InterviewDetail({
 export default function InterviewsPane({
   interviews,
   selectedId,
-  onSelect
+  onSelect,
+  sessionId
 }: InterviewsPaneProps): JSX.Element {
+  // Default to the current session's interviews; "All sessions" is the
+  // improvement-over-time view, one click away.
+  const [scope, setScope] = useState<'session' | 'all'>('session')
+
+  // Detail view is reachable from either scope (e.g. a just-completed interview
+  // auto-opens) — resolve against the full list.
   const selected = selectedId !== null ? interviews.find((i) => i.id === selectedId) ?? null : null
 
   if (selected !== null) {
     return <InterviewDetail interview={selected} onBack={() => onSelect(null)} />
   }
 
-  if (interviews.length === 0) {
-    return (
-      <div className="study-empty">No interviews yet — ask your tutor for a mock interview.</div>
-    )
-  }
+  const visible =
+    scope === 'session' && sessionId !== null
+      ? interviews.filter((i) => i.sessionId === sessionId)
+      : interviews
 
   return (
-    <div className="interviews-list">
-      {interviews.map((interview) => (
-        <InterviewRow key={interview.id} interview={interview} onSelect={onSelect} />
-      ))}
+    <div className="interviews-pane">
+      <div className="interviews-scope" role="tablist" aria-label="Interview scope">
+        <button
+          type="button"
+          className={`interviews-scope-btn${scope === 'session' ? ' interviews-scope-active' : ''}`}
+          onClick={() => setScope('session')}
+        >
+          This session
+        </button>
+        <button
+          type="button"
+          className={`interviews-scope-btn${scope === 'all' ? ' interviews-scope-active' : ''}`}
+          onClick={() => setScope('all')}
+        >
+          All sessions ({interviews.length})
+        </button>
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="study-empty">
+          {scope === 'session' && interviews.length > 0
+            ? 'No interviews in this session yet — switch to "All sessions" for your full history.'
+            : 'No interviews yet — ask your tutor for a mock interview.'}
+        </div>
+      ) : (
+        <div className="interviews-list">
+          {visible.map((interview) => (
+            <InterviewRow key={interview.id} interview={interview} onSelect={onSelect} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

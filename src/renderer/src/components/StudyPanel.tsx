@@ -227,6 +227,7 @@ export default function StudyPanel({
 
         {tab === 'interviews' && (
           <InterviewsPane
+            sessionId={sessionId}
             interviews={interviews}
             selectedId={selectedInterviewId}
             onSelect={onSelectInterview}
