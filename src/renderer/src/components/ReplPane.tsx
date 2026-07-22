@@ -1,0 +1,379 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import CodeMirror from '@uiw/react-codemirror'
+import { javascript } from '@codemirror/lang-javascript'
+import { html } from '@codemirror/lang-html'
+import { css } from '@codemirror/lang-css'
+import type { Extension } from '@uiw/react-codemirror'
+import ReactMarkdown from 'react-markdown'
+import type { Exercise, RunResult } from '../../../shared/types'
+
+interface ReplPaneProps {
+  sessionId: string
+  exercise: Exercise
+  onStudentMessage: (text: string) => void
+  onCodeSaved: (exerciseId: string, code: string) => void
+  onStudentActivity: () => void
+}
+
+interface ConsoleLine {
+  level: 'log' | 'warn' | 'error'
+  text: string
+}
+
+function languageExtension(language: string): Extension[] {
+  const lang = language.toLowerCase()
+  switch (lang) {
+    case 'html':
+      return [html()]
+    case 'css':
+      return [css()]
+    case 'typescript':
+      return [javascript({ jsx: false, typescript: true })]
+    case 'tsx':
+      return [javascript({ jsx: true, typescript: true })]
+    case 'jsx':
+      return [javascript({ jsx: true, typescript: false })]
+    case 'javascript':
+    default:
+      return [javascript({ jsx: false, typescript: false })]
+  }
+}
+
+export default function ReplPane({
+  sessionId,
+  exercise,
+  onStudentMessage,
+  onCodeSaved,
+  onStudentActivity
+}: ReplPaneProps): JSX.Element {
+  const [code, setCode] = useState(exercise.solutionCode ?? exercise.starterCode)
+  const [promptOpen, setPromptOpen] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<RunResult | null>(null)
+  const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([])
+  const [outputOpen, setOutputOpen] = useState(false)
+
+  // Accumulator ref so the delayed 'web' report reads freshly-captured console lines.
+  const consoleLinesRef = useRef<ConsoleLine[]>([])
+  // Tracks whether the current `code` has ever been run/reported, and whether it has
+  // been edited since the last run — used by "Submit for review" to decide whether to
+  // run again first.
+  const hasRunRef = useRef(false)
+  const dirtyRef = useRef(true)
+
+  // Re-initialize editor content when the exercise changes. Deliberately keyed only on
+  // exercise.id: onCodeSaved (below) writes autosaves back into the parent's exercise
+  // object's solutionCode, and including solutionCode/starterCode here would re-fire
+  // this effect after every autosave, wiping the run result and closing the output
+  // modal mid-session. The component is also keyed by exercise.id (see StudyPanel), so
+  // id is the only meaningful trigger.
+  useEffect(() => {
+    setCode(exercise.solutionCode ?? exercise.starterCode)
+    setResult(null)
+    setConsoleLines([])
+    consoleLinesRef.current = []
+    hasRunRef.current = false
+    dirtyRef.current = true
+    setPromptOpen(true)
+    setOutputOpen(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exercise.id])
+
+  // Capture console messages posted from the sandboxed iframe.
+  useEffect(() => {
+    const handler = (event: MessageEvent): void => {
+      const data = event.data as unknown
+      if (
+        typeof data === 'object' &&
+        data !== null &&
+        '__tutorConsole' in data &&
+        (data as { __tutorConsole?: unknown }).__tutorConsole === true
+      ) {
+        const { level, text } = data as { level?: unknown; text?: unknown }
+        const safeLevel: ConsoleLine['level'] =
+          level === 'warn' || level === 'error' ? level : 'log'
+        const line: ConsoleLine = { level: safeLevel, text: typeof text === 'string' ? text : '' }
+        consoleLinesRef.current = [...consoleLinesRef.current, line]
+        setConsoleLines(consoleLinesRef.current)
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [])
+
+  // Close the output modal on Escape, without leaking the keypress to other
+  // window-level Escape handlers (e.g. Composer's recording-cancel handler).
+  // Listener is only attached while the modal is open.
+  useEffect(() => {
+    if (!outputOpen) return
+    const handler = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setOutputOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [outputOpen])
+
+  // Remounting a 'web' result's iframe re-executes the code and replays its
+  // console postMessages — clear captured lines whenever the modal opens on a
+  // web result so the replay repopulates them without duplicates.
+  useEffect(() => {
+    if (outputOpen && result !== null && result.kind === 'web') {
+      consoleLinesRef.current = []
+      setConsoleLines([])
+    }
+  }, [outputOpen, result])
+
+  const handleChange = useCallback(
+    (value: string) => {
+      setCode(value)
+      dirtyRef.current = true
+      onStudentActivity()
+    },
+    [onStudentActivity]
+  )
+
+  const handleReset = useCallback(() => {
+    if (!window.confirm('Discard your changes and restore the starter code?')) return
+    setCode(exercise.starterCode)
+    dirtyRef.current = true
+  }, [exercise.starterCode])
+
+  // ---------- Autosave ----------
+  // Persist edits as the student types (debounced), so switching sessions or
+  // exercises never loses code that was never Run. savedCodeRef tracks what's
+  // already on disk to avoid redundant writes.
+  const codeRef = useRef(code)
+  codeRef.current = code
+  const savedCodeRef = useRef(code)
+
+  // New exercise → reset the on-disk baseline to what we just loaded.
+  useEffect(() => {
+    savedCodeRef.current = exercise.solutionCode ?? exercise.starterCode
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exercise.id])
+
+  // Debounced save 600ms after the last keystroke.
+  useEffect(() => {
+    if (code === savedCodeRef.current) return
+    const timer = setTimeout(() => {
+      const toSave = code
+      savedCodeRef.current = toSave
+      window.tutor
+        .saveExerciseCode(exercise.id, toSave)
+        .then(() => onCodeSaved(exercise.id, toSave))
+        .catch(() => {})
+    }, 600)
+    return () => clearTimeout(timer)
+  }, [code, exercise.id, onCodeSaved])
+
+  // Flush any not-yet-saved edits when the exercise switches or the pane unmounts
+  // (cleanup runs before the new exercise's effects, so refs still hold old values).
+  useEffect(() => {
+    const exerciseId = exercise.id
+    return () => {
+      if (codeRef.current !== savedCodeRef.current) {
+        const toSave = codeRef.current
+        window.tutor
+          .saveExerciseCode(exerciseId, toSave)
+          .then(() => onCodeSaved(exerciseId, toSave))
+          .catch(() => {})
+        savedCodeRef.current = toSave
+      }
+    }
+  }, [exercise.id, onCodeSaved])
+
+  // Runs the current code, displays the result, and reports it to the instructor.
+  // Returns once the report has been sent.
+  const runAndReport = useCallback(async (): Promise<void> => {
+    onStudentActivity()
+    consoleLinesRef.current = []
+    setConsoleLines([])
+    setRunning(true)
+    setOutputOpen(true)
+    try {
+      const runResult = await window.tutor.runCode({ language: exercise.language, code })
+      setResult(runResult)
+
+      let output: string
+      if (runResult.kind === 'node') {
+        output =
+          runResult.stdout +
+          (runResult.stderr ? '\n[stderr]\n' + runResult.stderr : '') +
+          (runResult.timedOut ? '\n[timed out]' : '')
+      } else if (runResult.kind === 'error') {
+        output = 'Build error: ' + runResult.message
+      } else {
+        // 'web' — wait for the iframe's console messages to arrive via postMessage.
+        await new Promise((resolve) => setTimeout(resolve, 800))
+        output =
+          consoleLinesRef.current.length > 0
+            ? consoleLinesRef.current.map((line) => `${line.level}: ${line.text}`).join('\n')
+            : '(no console output)'
+      }
+
+      await window.tutor.reportRun({ sessionId, exerciseId: exercise.id, code, output })
+      hasRunRef.current = true
+      dirtyRef.current = false
+      onCodeSaved(exercise.id, code)
+    } finally {
+      setRunning(false)
+    }
+  }, [code, exercise.id, exercise.language, sessionId, onCodeSaved, onStudentActivity])
+
+  const handleRun = useCallback(() => {
+    void runAndReport()
+  }, [runAndReport])
+
+  const handleSubmit = useCallback(() => {
+    void (async () => {
+      if (!hasRunRef.current || dirtyRef.current) {
+        await runAndReport()
+      }
+      onStudentMessage("I've submitted my solution for the current exercise — please review it.")
+    })()
+  }, [runAndReport, onStudentMessage])
+
+  const handleShowLastOutput = useCallback(() => {
+    setOutputOpen(true)
+  }, [])
+
+  const handleCloseOutput = useCallback(() => {
+    setOutputOpen(false)
+  }, [])
+
+  const handleScrimClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      setOutputOpen(false)
+    }
+  }, [])
+
+  return (
+    <div className="repl">
+      <details
+        className="repl-prompt"
+        open={promptOpen}
+        onToggle={(event) => setPromptOpen((event.target as HTMLDetailsElement).open)}
+      >
+        <summary className="repl-prompt-summary">{exercise.title}</summary>
+        <div className="exercise-prompt markdown-body">
+          <ReactMarkdown>{exercise.promptMd}</ReactMarkdown>
+        </div>
+      </details>
+
+      <div className="repl-toolbar">
+        <div className="repl-toolbar-left">
+          <span className="repl-title">{exercise.title}</span>
+          <span className="repl-lang-badge">{exercise.language}</span>
+        </div>
+        <div className="repl-toolbar-right">
+          <button type="button" className="repl-btn repl-btn-reset" onClick={handleReset}>
+            Reset
+          </button>
+          {result !== null && (
+            <button
+              type="button"
+              className="repl-btn repl-btn-last-output"
+              onClick={handleShowLastOutput}
+            >
+              Last output
+            </button>
+          )}
+          <button
+            type="button"
+            className="repl-btn repl-btn-run"
+            onClick={handleRun}
+            disabled={running}
+          >
+            {running ? 'Running…' : '▶ Run'}
+          </button>
+          <button type="button" className="repl-btn repl-btn-submit" onClick={handleSubmit}>
+            Submit for review
+          </button>
+        </div>
+      </div>
+
+      <div className="repl-editor">
+        <CodeMirror
+          value={code}
+          height="100%"
+          theme="dark"
+          extensions={languageExtension(exercise.language)}
+          onChange={handleChange}
+        />
+      </div>
+
+      {outputOpen && (
+        <div className="repl-output-scrim" onClick={handleScrimClick}>
+          <div className="repl-output-modal">
+            <div className="repl-output-modal-header">
+              <span className="repl-output-modal-title">
+                Run output <span className="repl-output-modal-subtitle">{exercise.title}</span>
+              </span>
+              <button
+                type="button"
+                className="repl-output-modal-close"
+                onClick={handleCloseOutput}
+                aria-label="Close output"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="repl-output-modal-body">
+              {running && <div className="repl-output-status">Running…</div>}
+
+              {!running && result === null && (
+                <div className="repl-output-empty">Run your code to see output here.</div>
+              )}
+
+              {!running && result !== null && result.kind === 'node' && (
+                <div className="repl-output-node">
+                  {result.timedOut && (
+                    <div className="repl-output-timeout">⏱ Timed out after 5s</div>
+                  )}
+                  {result.stdout !== '' && <pre className="repl-stdout">{result.stdout}</pre>}
+                  {result.stderr !== '' && <pre className="repl-stderr">{result.stderr}</pre>}
+                  <div className="repl-output-footer">
+                    exit code: {result.exitCode ?? 'n/a'} · {result.durationMs}ms
+                  </div>
+                </div>
+              )}
+
+              {!running && result !== null && result.kind === 'error' && (
+                <pre className="repl-output-error">Build error: {result.message}</pre>
+              )}
+
+              {!running && result !== null && result.kind === 'web' && (
+                <div className="repl-output-web">
+                  <iframe
+                    className="repl-iframe"
+                    sandbox="allow-scripts"
+                    srcDoc={result.html}
+                    title="Exercise output"
+                  />
+                  <div className="repl-console">
+                    {consoleLines.length === 0 ? (
+                      <div className="repl-console-empty">(no console output)</div>
+                    ) : (
+                      consoleLines.map((line, index) => (
+                        <div
+                          key={index}
+                          className={`repl-console-line repl-console-${line.level}`}
+                        >
+                          {line.level}: {line.text}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

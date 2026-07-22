@@ -1,0 +1,517 @@
+import Database from 'better-sqlite3'
+import { randomUUID } from 'crypto'
+import type {
+  DbApi,
+  Exercise,
+  Interview,
+  InterviewScore,
+  Lesson,
+  ProgressNote,
+  Session,
+  TranscriptTurn
+} from '../shared/types'
+
+interface SessionRow {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+interface TurnRow {
+  id: number
+  session_id: string
+  role: 'student' | 'instructor'
+  content: string
+  created_at: string
+}
+
+interface LessonRow {
+  id: string
+  session_id: string | null
+  title: string
+  topics: string
+  content_md: string
+  status: Lesson['status']
+  created_at: string
+}
+
+interface ExerciseRow {
+  id: string
+  lesson_id: string | null
+  session_id: string | null
+  title: string
+  prompt_md: string
+  language: string
+  starter_code: string
+  solution_code: string | null
+  status: Exercise['status']
+  created_at: string
+}
+
+interface ProgressRow {
+  id: number
+  topic: string
+  mastery: ProgressNote['mastery']
+  note: string
+  created_at: string
+}
+
+interface InterviewRow {
+  id: string
+  session_id: string | null
+  kind: string
+  level: string
+  status: Interview['status']
+  started_at: string
+  completed_at: string | null
+  overall_score: number | null
+  scores: string
+  report_md: string | null
+}
+
+function toInterview(row: InterviewRow): Interview {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    kind: row.kind,
+    level: row.level,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    overallScore: row.overall_score,
+    scores: JSON.parse(row.scores) as InterviewScore[],
+    reportMd: row.report_md
+  }
+}
+
+function toSession(row: SessionRow): Session {
+  return {
+    id: row.id,
+    title: row.title,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }
+}
+
+function toTurn(row: TurnRow): TranscriptTurn {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    role: row.role,
+    content: row.content,
+    createdAt: row.created_at
+  }
+}
+
+function toLesson(row: LessonRow): Lesson {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    title: row.title,
+    topics: JSON.parse(row.topics) as string[],
+    contentMd: row.content_md,
+    status: row.status,
+    createdAt: row.created_at
+  }
+}
+
+function toExercise(row: ExerciseRow): Exercise {
+  return {
+    id: row.id,
+    lessonId: row.lesson_id,
+    sessionId: row.session_id,
+    title: row.title,
+    promptMd: row.prompt_md,
+    language: row.language,
+    starterCode: row.starter_code,
+    solutionCode: row.solution_code,
+    status: row.status,
+    createdAt: row.created_at
+  }
+}
+
+function toProgressNote(row: ProgressRow): ProgressNote {
+  return {
+    id: row.id,
+    topic: row.topic,
+    mastery: row.mastery,
+    note: row.note,
+    createdAt: row.created_at
+  }
+}
+
+export function createDb(dbPath: string): DbApi {
+  const db = new Database(dbPath)
+  db.pragma('journal_mode = WAL')
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS turns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS raw_messages (
+      session_id TEXT PRIMARY KEY,
+      json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS lessons (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      title TEXT NOT NULL,
+      topics TEXT NOT NULL,
+      content_md TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS exercises (
+      id TEXT PRIMARY KEY,
+      lesson_id TEXT,
+      session_id TEXT,
+      title TEXT NOT NULL,
+      prompt_md TEXT NOT NULL,
+      language TEXT NOT NULL,
+      starter_code TEXT NOT NULL,
+      solution_code TEXT,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS whiteboards (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      title TEXT,
+      markdown TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS interviews (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      kind TEXT NOT NULL,
+      level TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      overall_score INTEGER,
+      scores TEXT NOT NULL,
+      report_md TEXT
+    );
+    CREATE TABLE IF NOT EXISTS progress (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic TEXT NOT NULL,
+      mastery TEXT NOT NULL,
+      note TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `)
+
+  const insertSession = db.prepare(
+    'INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)'
+  )
+  const selectSessions = db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC')
+  const selectSession = db.prepare('SELECT * FROM sessions WHERE id = ?')
+  const updateSessionTimestamp = db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?')
+
+  const insertTurn = db.prepare(
+    'INSERT INTO turns (session_id, role, content, created_at) VALUES (?, ?, ?, ?)'
+  )
+  const selectTurns = db.prepare('SELECT * FROM turns WHERE session_id = ? ORDER BY id ASC')
+
+  const selectRawMessages = db.prepare('SELECT json FROM raw_messages WHERE session_id = ?')
+  const upsertRawMessages = db.prepare(`
+    INSERT INTO raw_messages (session_id, json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at
+  `)
+
+  const insertLesson = db.prepare(`
+    INSERT INTO lessons (id, session_id, title, topics, content_md, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  const selectLessons = db.prepare('SELECT * FROM lessons ORDER BY created_at DESC')
+
+  const insertExercise = db.prepare(`
+    INSERT INTO exercises (id, lesson_id, session_id, title, prompt_md, language, starter_code, solution_code, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  const selectExercises = db.prepare('SELECT * FROM exercises ORDER BY created_at DESC')
+  const selectExercise = db.prepare('SELECT * FROM exercises WHERE id = ?')
+  const updateExerciseSolutionStmt = db.prepare(
+    'UPDATE exercises SET solution_code = ?, status = ? WHERE id = ?'
+  )
+
+  const selectSessionExercises = db.prepare(
+    'SELECT * FROM exercises WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
+  )
+
+  const insertWhiteboard = db.prepare(
+    'INSERT INTO whiteboards (id, session_id, title, markdown, created_at) VALUES (?, ?, ?, ?, ?)'
+  )
+  const selectWhiteboards = db.prepare(
+    'SELECT * FROM whiteboards WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
+  )
+
+  const insertInterview = db.prepare(`
+    INSERT INTO interviews (id, session_id, kind, level, status, started_at, completed_at, overall_score, scores, report_md)
+    VALUES (?, ?, ?, ?, 'in_progress', ?, NULL, NULL, '[]', NULL)
+  `)
+  const selectActiveInterview = db.prepare(
+    "SELECT * FROM interviews WHERE session_id = ? AND status = 'in_progress' ORDER BY started_at DESC LIMIT 1"
+  )
+  const abandonInterviews = db.prepare(
+    "UPDATE interviews SET status = 'abandoned' WHERE session_id = ? AND status = 'in_progress'"
+  )
+  const completeInterviewStmt = db.prepare(`
+    UPDATE interviews SET status = 'completed', completed_at = ?, overall_score = ?, scores = ?, report_md = ?
+    WHERE id = ?
+  `)
+  const selectInterviews = db.prepare(
+    "SELECT * FROM interviews WHERE status = 'completed' ORDER BY completed_at DESC"
+  )
+
+  const insertProgress = db.prepare(
+    'INSERT INTO progress (topic, mastery, note, created_at) VALUES (?, ?, ?, ?)'
+  )
+  const selectProgress = db.prepare('SELECT * FROM progress ORDER BY created_at DESC')
+
+  return {
+    createSession(title) {
+      const now = new Date().toISOString()
+      const session: Session = { id: randomUUID(), title, createdAt: now, updatedAt: now }
+      insertSession.run(session.id, session.title, session.createdAt, session.updatedAt)
+      return session
+    },
+
+    listSessions() {
+      return (selectSessions.all() as SessionRow[]).map(toSession)
+    },
+
+    getSession(id) {
+      const row = selectSession.get(id) as SessionRow | undefined
+      return row ? toSession(row) : null
+    },
+
+    touchSession(id) {
+      updateSessionTimestamp.run(new Date().toISOString(), id)
+    },
+
+    updateSessionTitle(id, title) {
+      db.prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(
+        title,
+        new Date().toISOString(),
+        id
+      )
+    },
+
+    deleteSession(id) {
+      db.transaction(() => {
+        db.prepare('DELETE FROM turns WHERE session_id = ?').run(id)
+        db.prepare('DELETE FROM raw_messages WHERE session_id = ?').run(id)
+        db.prepare('DELETE FROM whiteboards WHERE session_id = ?').run(id)
+        db.prepare('DELETE FROM exercises WHERE session_id = ?').run(id)
+        // Lesson plans are course material, not conversation — keep them, unlinked.
+        db.prepare('UPDATE lessons SET session_id = NULL WHERE session_id = ?').run(id)
+        db.prepare('DELETE FROM sessions WHERE id = ?').run(id)
+      })()
+    },
+
+    addTurn(sessionId, role, content) {
+      const createdAt = new Date().toISOString()
+      const result = insertTurn.run(sessionId, role, content, createdAt)
+      return {
+        id: Number(result.lastInsertRowid),
+        sessionId,
+        role,
+        content,
+        createdAt
+      }
+    },
+
+    getTranscript(sessionId) {
+      return (selectTurns.all(sessionId) as TurnRow[]).map(toTurn)
+    },
+
+    getRawMessages(sessionId) {
+      const row = selectRawMessages.get(sessionId) as { json: string } | undefined
+      return row ? row.json : null
+    },
+
+    saveRawMessages(sessionId, json) {
+      upsertRawMessages.run(sessionId, json, new Date().toISOString())
+    },
+
+    createLesson(input) {
+      const lesson: Lesson = {
+        id: randomUUID(),
+        sessionId: input.sessionId,
+        title: input.title,
+        topics: input.topics,
+        contentMd: input.contentMd,
+        status: 'planned',
+        createdAt: new Date().toISOString()
+      }
+      insertLesson.run(
+        lesson.id,
+        lesson.sessionId,
+        lesson.title,
+        JSON.stringify(lesson.topics),
+        lesson.contentMd,
+        lesson.status,
+        lesson.createdAt
+      )
+      return lesson
+    },
+
+    listLessons() {
+      return (selectLessons.all() as LessonRow[]).map(toLesson)
+    },
+
+    createExercise(input) {
+      const exercise: Exercise = {
+        id: randomUUID(),
+        lessonId: input.lessonId,
+        sessionId: input.sessionId,
+        title: input.title,
+        promptMd: input.promptMd,
+        language: input.language,
+        starterCode: input.starterCode,
+        solutionCode: null,
+        status: 'assigned',
+        createdAt: new Date().toISOString()
+      }
+      insertExercise.run(
+        exercise.id,
+        exercise.lessonId,
+        exercise.sessionId,
+        exercise.title,
+        exercise.promptMd,
+        exercise.language,
+        exercise.starterCode,
+        exercise.solutionCode,
+        exercise.status,
+        exercise.createdAt
+      )
+      return exercise
+    },
+
+    listExercises() {
+      return (selectExercises.all() as ExerciseRow[]).map(toExercise)
+    },
+
+    getExercise(id) {
+      const row = selectExercise.get(id) as ExerciseRow | undefined
+      return row ? toExercise(row) : null
+    },
+
+    listSessionExercises(sessionId) {
+      return (selectSessionExercises.all(sessionId) as ExerciseRow[]).map(toExercise)
+    },
+
+    addWhiteboard(input) {
+      const snapshot = {
+        id: randomUUID(),
+        sessionId: input.sessionId,
+        title: input.title,
+        markdown: input.markdown,
+        createdAt: new Date().toISOString()
+      }
+      insertWhiteboard.run(
+        snapshot.id,
+        snapshot.sessionId,
+        snapshot.title,
+        snapshot.markdown,
+        snapshot.createdAt
+      )
+      return snapshot
+    },
+
+    listWhiteboards(sessionId) {
+      const rows = selectWhiteboards.all(sessionId) as Array<{
+        id: string
+        session_id: string
+        title: string | null
+        markdown: string
+        created_at: string
+      }>
+      return rows.map((row) => ({
+        id: row.id,
+        sessionId: row.session_id,
+        title: row.title,
+        markdown: row.markdown,
+        createdAt: row.created_at
+      }))
+    },
+
+    saveExerciseCode(id, code) {
+      db.prepare('UPDATE exercises SET solution_code = ? WHERE id = ?').run(code, id)
+    },
+
+    updateExerciseSolution(id, code, status) {
+      updateExerciseSolutionStmt.run(code, status, id)
+    },
+
+    createInterview(input) {
+      const id = randomUUID()
+      const startedAt = new Date().toISOString()
+      insertInterview.run(id, input.sessionId, input.kind, input.level, startedAt)
+      return {
+        id,
+        sessionId: input.sessionId,
+        kind: input.kind,
+        level: input.level,
+        status: 'in_progress',
+        startedAt,
+        completedAt: null,
+        overallScore: null,
+        scores: [],
+        reportMd: null
+      }
+    },
+
+    getActiveInterview(sessionId) {
+      const row = selectActiveInterview.get(sessionId) as InterviewRow | undefined
+      return row ? toInterview(row) : null
+    },
+
+    abandonActiveInterviews(sessionId) {
+      abandonInterviews.run(sessionId)
+    },
+
+    completeInterview(id, input) {
+      completeInterviewStmt.run(
+        new Date().toISOString(),
+        input.overallScore,
+        JSON.stringify(input.scores),
+        input.reportMd,
+        id
+      )
+    },
+
+    listInterviews() {
+      return (selectInterviews.all() as InterviewRow[]).map(toInterview)
+    },
+
+    addProgressNote(input) {
+      const createdAt = new Date().toISOString()
+      const result = insertProgress.run(input.topic, input.mastery, input.note, createdAt)
+      return {
+        id: Number(result.lastInsertRowid),
+        topic: input.topic,
+        mastery: input.mastery,
+        note: input.note,
+        createdAt
+      }
+    },
+
+    listProgress() {
+      return (selectProgress.all() as ProgressRow[]).map(toProgressNote)
+    }
+  }
+}
