@@ -3,8 +3,9 @@ import ReactMarkdown from 'react-markdown'
 import type { Exercise, Interview } from '../../../shared/types'
 import ReplPane from './ReplPane'
 import InterviewsPane from './InterviewsPane'
+import LibraryPane from './LibraryPane'
 
-export type StudyTab = 'whiteboard' | 'exercise' | 'interviews'
+export type StudyTab = 'whiteboard' | 'exercise' | 'interviews' | 'library'
 
 export interface WhiteboardState {
   markdown: string
@@ -126,6 +127,15 @@ export default function StudyPanel({
           {interviewActive && <span className="interview-live-dot" aria-hidden="true" />}
           Interviews
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'library'}
+          className={tab === 'library' ? 'study-tab study-tab-active' : 'study-tab'}
+          onClick={() => onTabChange('library')}
+        >
+          Library
+        </button>
       </div>
 
       <div className="study-content">
@@ -222,6 +232,8 @@ export default function StudyPanel({
             onSelect={onSelectInterview}
           />
         )}
+
+        {tab === 'library' && <LibraryPane onStudentMessage={onStudentMessage} />}
 
         {/* The REPL stays mounted across tab switches (just hidden on the
             whiteboard tab) so editor content, scroll position, and pending
