@@ -267,6 +267,8 @@ export interface TutorBridge {
   listProjects(): Promise<Project[]>
   /** Opens the native folder picker and attaches the chosen existing directory as a project linked to the session. Null if cancelled. */
   attachProject(sessionId: string): Promise<Project | null>
+  /** Link an existing project to the session (switch the session's active project). */
+  linkProject(sessionId: string, projectId: string): Promise<Project | null>
   /** The project linked to a session plus its current uncommitted changes. */
   getSessionProjectState(
     sessionId: string
@@ -325,6 +327,7 @@ export const IPC = {
   interviewNudge: 'interview:nudge',
   listProjects: 'projects:list',
   attachProject: 'projects:attach',
+  linkProject: 'projects:link',
   sessionProjectState: 'projects:session-state',
   projectPushMode: 'projects:push-mode',
   respondScaffold: 'projects:respond-scaffold',

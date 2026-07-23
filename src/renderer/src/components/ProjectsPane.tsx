@@ -5,6 +5,8 @@ interface ProjectsPaneProps {
   sessionProject: { project: Project; changes: ChangedFile[] } | null
   sessionId: string | null
   onAttach: () => void
+  /** Switch the session's active project to this one. */
+  onSelectProject: (projectId: string) => void
   onPushModeChange: (projectId: string, mode: Project['pushMode']) => void
   onOpen: (projectId: string, target: 'editor' | 'finder') => void
   onStudentMessage: (text: string) => void
@@ -125,16 +127,44 @@ function ActiveProjectCard({
   )
 }
 
-function ProjectRow({ project, active }: { project: Project; active: boolean }): JSX.Element {
+function ProjectRow({
+  project,
+  active,
+  disabled,
+  onSelect
+}: {
+  project: Project
+  active: boolean
+  disabled: boolean
+  onSelect: (projectId: string) => void
+}): JSX.Element {
   return (
-    <div className={active ? 'project-row project-row-active' : 'project-row'}>
+    <div
+      className={active ? 'project-row project-row-active' : 'project-row'}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      title={active ? 'Active in this session' : 'Click to use this project in the current session'}
+      onClick={() => {
+        if (!active && !disabled) onSelect(project.id)
+      }}
+      onKeyDown={(e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && !active && !disabled) {
+          e.preventDefault()
+          onSelect(project.id)
+        }
+      }}
+    >
       <div className="project-row-main">
         <span className="project-row-name">{project.name}</span>
         <span className="project-row-path" title={project.path}>
           {truncateMiddle(project.path, 40)}
         </span>
       </div>
-      <span className="project-row-date">{formatProjectDate(project.createdAt)}</span>
+      {active ? (
+        <span className="project-row-active-badge">Active</span>
+      ) : (
+        <span className="project-row-date">{formatProjectDate(project.createdAt)}</span>
+      )}
     </div>
   )
 }
@@ -144,6 +174,7 @@ export default function ProjectsPane({
   sessionProject,
   sessionId,
   onAttach,
+  onSelectProject,
   onPushModeChange,
   onOpen,
   onStudentMessage
@@ -186,6 +217,8 @@ export default function ProjectsPane({
                 key={project.id}
                 project={project}
                 active={sessionProject !== null && sessionProject.project.id === project.id}
+                disabled={sessionId === null}
+                onSelect={onSelectProject}
               />
             ))}
           </div>

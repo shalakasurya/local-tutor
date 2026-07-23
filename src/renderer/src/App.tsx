@@ -469,6 +469,23 @@ export default function App(): JSX.Element {
     }
   }, [])
 
+  // Switch the session's active project to an already-registered one (Projects list click).
+  // The resulting 'project-linked' event updates sessionProject/tab; we refresh changes here.
+  const handleSelectProject = useCallback(async (projectId: string) => {
+    const sessionId = activeSessionIdRef.current
+    if (!sessionId) return
+    try {
+      const p = await window.tutor.linkProject(sessionId, projectId)
+      if (p) {
+        const projectState = await window.tutor.getSessionProjectState(sessionId)
+        sessionProjectRef.current = projectState
+        setSessionProject(projectState)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to switch project')
+    }
+  }, [])
+
   // Optimistically flips the push mode in both the projects list and the active
   // session's project (if it's the same project), then persists via the bridge.
   const handlePushModeChange = useCallback(
@@ -639,6 +656,7 @@ export default function App(): JSX.Element {
         projects={projects}
         sessionProject={sessionProject}
         onAttachProject={() => void handleAttachProject()}
+        onSelectProject={(id) => void handleSelectProject(id)}
         onProjectPushModeChange={handlePushModeChange}
         onOpenProject={handleOpenProject}
       />

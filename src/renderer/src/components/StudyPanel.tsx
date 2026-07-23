@@ -34,6 +34,7 @@ interface StudyPanelProps {
   projects: Project[]
   sessionProject: { project: Project; changes: ChangedFile[] } | null
   onAttachProject: () => void
+  onSelectProject: (projectId: string) => void
   onProjectPushModeChange: (projectId: string, mode: Project['pushMode']) => void
   onOpenProject: (projectId: string, target: 'editor' | 'finder') => void
 }
@@ -72,6 +73,7 @@ export default function StudyPanel({
   projects,
   sessionProject,
   onAttachProject,
+  onSelectProject,
   onProjectPushModeChange,
   onOpenProject
 }: StudyPanelProps): JSX.Element {
@@ -260,6 +262,7 @@ export default function StudyPanel({
             sessionProject={sessionProject}
             sessionId={sessionId}
             onAttach={onAttachProject}
+            onSelectProject={onSelectProject}
             onPushModeChange={onProjectPushModeChange}
             onOpen={onOpenProject}
             onStudentMessage={onStudentMessage}

@@ -45,6 +45,10 @@ export function registerIpc(
     projects.attachViaPicker(sessionId)
   )
 
+  ipcMain.handle(IPC.linkProject, (_event, sessionId: string, projectId: string) =>
+    projects.linkToSession(sessionId, projectId)
+  )
+
   ipcMain.handle(IPC.sessionProjectState, async (_event, sessionId: string) => {
     const project = db.getSessionProject(sessionId)
     if (!project) return null

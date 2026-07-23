@@ -15,6 +15,7 @@ const bridge: TutorBridge = {
   listInterviews: () => ipcRenderer.invoke(IPC.listInterviews),
   listProjects: () => ipcRenderer.invoke(IPC.listProjects),
   attachProject: (sessionId) => ipcRenderer.invoke(IPC.attachProject, sessionId),
+  linkProject: (sessionId, projectId) => ipcRenderer.invoke(IPC.linkProject, sessionId, projectId),
   getSessionProjectState: (sessionId) => ipcRenderer.invoke(IPC.sessionProjectState, sessionId),
   setProjectPushMode: (projectId, mode) => ipcRenderer.invoke(IPC.projectPushMode, projectId, mode),
   respondScaffold: (requestId, approved) => ipcRenderer.invoke(IPC.respondScaffold, requestId, approved),

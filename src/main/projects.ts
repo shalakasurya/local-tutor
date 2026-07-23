@@ -111,6 +111,16 @@ export class ProjectsService {
     return this.register(name, dirPath, sessionId)
   }
 
+  /** Switch the session's active project to an already-registered one. */
+  linkToSession(sessionId: string, projectId: string): Project | null {
+    const project = this.db.getProject(projectId)
+    if (!project) return null
+    this.db.linkSessionProject(sessionId, projectId)
+    this.startWatcher(project)
+    this.emit({ type: 'project-linked', sessionId, project })
+    return project
+  }
+
   /** UI flow: attach an existing directory. Null = cancelled. */
   async attachViaPicker(sessionId: string): Promise<Project | null> {
     const dirPath = await this.pickDirectory('Choose a project folder to attach')

@@ -2027,3 +2027,21 @@ button {
   border-top: 1px solid var(--border);
   background: var(--panel-raised);
 }
+
+/* Clickable project rows + active badge */
+.project-row {
+  cursor: pointer;
+}
+.project-row-active {
+  cursor: default;
+}
+.project-row:not(.project-row-active):hover {
+  background: #23272f;
+}
+.project-row-active-badge {
+  font-size: 11px;
+  color: #4a7c44;
+  border: 1px solid #4a7c44;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
