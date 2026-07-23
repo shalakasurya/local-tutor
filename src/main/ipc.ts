@@ -82,7 +82,7 @@ export function registerIpc(
         `The candidate has been silent for about ${Math.round(idleSeconds)} seconds on the current ` +
         `interview question (check-in #${nudgeNumber}). Check in briefly and naturally, out loud, as a ` +
         `human interviewer would${escalation}. One or two spoken sentences; do not repeat the full ` +
-        `question; do not mention this reminder or that you were prompted.`
+        `question; do not mention the elapsed time, this reminder, or that you were prompted.`
       instructor.handleStudentMessage(sessionId, note, { hidden: true }).catch((err) => {
         console.error(err)
       })

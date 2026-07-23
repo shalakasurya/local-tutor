@@ -539,15 +539,16 @@ export default function App(): JSX.Element {
   }, [ttsSpeaking])
 
   // Interview idle-nudge scheduler: while an interview is active, poll every 5s for
-  // ~45s of student inactivity and ask the main process to have the interviewer speak
-  // a check-in. Capped at 3 nudges per idle stretch (reset by markStudentActivity).
+  // ~25s of student inactivity and ask the main process to have the interviewer speak
+  // a check-in — about as long as a human coach lets silence sit in conversation.
+  // Capped at 3 nudges per idle stretch (reset by markStudentActivity).
   useEffect(() => {
     if (!interviewActive) return
     const interval = setInterval(() => {
       if (streamingRef.current || ttsSpeakingRef.current) return
       if (activeSessionIdRef.current === null) return
       const idle = Date.now() - lastActivityRef.current
-      if (idle >= 45_000 && nudgeCountRef.current < 3) {
+      if (idle >= 25_000 && nudgeCountRef.current < 3) {
         nudgeCountRef.current += 1
         lastActivityRef.current = Date.now()
         window.tutor
