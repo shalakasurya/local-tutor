@@ -2045,3 +2045,25 @@ button {
   border-radius: 999px;
   padding: 1px 8px;
 }
+
+/* Replay-aloud button on instructor bubbles (visible on hover) */
+.bubble-instructor {
+  position: relative;
+}
+.replay-btn {
+  position: absolute;
+  right: -30px;
+  bottom: 4px;
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms;
+}
+.turn-row-instructor:hover .replay-btn {
+  opacity: 0.7;
+}
+.replay-btn:hover {
+  opacity: 1;
+}

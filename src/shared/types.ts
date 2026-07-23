@@ -305,6 +305,8 @@ export interface TutorBridge {
   setVoiceReplies(enabled: boolean): Promise<void>
   /** Stop any in-progress speech immediately (barge-in). */
   stopSpeaking(): Promise<void>
+  /** Speak arbitrary text now (replay button). Works even when voice replies are off. */
+  speakText(text: string): Promise<void>
   /** Subscribe to tutor events. Returns an unsubscribe function. */
   onEvent(listener: (event: TutorEvent) => void): () => void
 }
@@ -340,6 +342,7 @@ export const IPC = {
   transcribe: 'voice:transcribe',
   setVoiceReplies: 'voice:set-replies',
   stopSpeaking: 'voice:stop-speaking',
+  speakText: 'voice:speak',
   /** main -> renderer event channel; payload is a TutorEvent */
   event: 'tutor:event'
 } as const

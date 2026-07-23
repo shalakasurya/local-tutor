@@ -620,6 +620,9 @@ export default function App(): JSX.Element {
           streamText={streamText}
           activity={activity}
           onTurnClick={handleTurnClick}
+          onReplay={
+            voice?.tts.available === true ? (text) => void window.tutor.speakText(text) : null
+          }
         />
 
         <Composer

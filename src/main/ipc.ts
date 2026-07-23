@@ -138,4 +138,6 @@ export function registerIpc(
   ipcMain.handle(IPC.setVoiceReplies, (_event, enabled: boolean) => speaker.setEnabled(enabled))
 
   ipcMain.handle(IPC.stopSpeaking, () => speaker.stop())
+
+  ipcMain.handle(IPC.speakText, (_event, text: string) => speaker.speakNow(String(text)))
 }

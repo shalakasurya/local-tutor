@@ -8,6 +8,8 @@ interface TranscriptPaneProps {
   activity: string | null
   /** Called when a turn is clicked — used to navigate the whiteboard to that point in time. */
   onTurnClick: (turn: TranscriptTurn) => void
+  /** Speak an instructor turn aloud again; null hides the replay buttons (TTS unavailable). */
+  onReplay: ((text: string) => void) | null
 }
 
 export default function TranscriptPane({
@@ -15,7 +17,8 @@ export default function TranscriptPane({
   streaming,
   streamText,
   activity,
-  onTurnClick
+  onTurnClick,
+  onReplay
 }: TranscriptPaneProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
@@ -52,6 +55,20 @@ export default function TranscriptPane({
             }}
           >
             {turn.content}
+            {turn.role === 'instructor' && onReplay !== null && (
+              <button
+                type="button"
+                className="replay-btn"
+                title="Hear this again"
+                aria-label="Replay this message aloud"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onReplay(turn.content)
+                }}
+              >
+                🔊
+              </button>
+            )}
           </div>
         </div>
       ))}

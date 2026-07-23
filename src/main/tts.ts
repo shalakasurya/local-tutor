@@ -45,6 +45,24 @@ export class Speaker {
     if (!on) this.stop()
   }
 
+  /**
+   * Speak text immediately (transcript replay). Deliberately ignores the
+   * `enabled` flag — this is an explicit user request, not an automatic reply.
+   */
+  speakNow(text: string): void {
+    if (process.platform !== 'darwin') return
+    this.stop()
+    this.buffer = ''
+    let rest = text
+    let match: RegExpMatchArray | null
+    while ((match = rest.match(SENTENCE_END))) {
+      const idx = match.index! + match[0].length
+      this.enqueueSanitized(rest.slice(0, idx))
+      rest = rest.slice(idx)
+    }
+    this.enqueueSanitized(rest)
+  }
+
   onTutorEvent(event: TutorEvent): void {
     if (!this.enabled || process.platform !== 'darwin') return
 
