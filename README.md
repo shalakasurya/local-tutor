@@ -41,6 +41,12 @@ Config (optional, in `.env`): `WHISPER_BIN`, `WHISPER_MODEL`, `SAY_VOICE`, `SAY_
 
 Data lives in the Electron `userData` directory (`local-tutor.db`).
 
+## Project mode (pair programming in your own editor)
+
+Attach a real project directory (Projects tab → "Attach folder…") or ask the tutor to start one — it opens a folder picker, and your choice of location is the consent. Then work in VS Code or any editor: the app watches the directory, shows changed files live, and the tutor reads your *actual* code (diffs since it last looked, individual files) when guiding you. Scaffolding goes through an approve-per-batch dialog. Turn on "Pair-programming comments" and the tutor will speak up on its own after you pause editing (throttled, off by default).
+
+Change tracking uses a shadow git repository in app data — your project's own `.git` (or lack of one) is never touched, and secrets/`node_modules`/build output are never read.
+
 ## Roadmap
 
 1. ✅ Text tutor loop (this phase)

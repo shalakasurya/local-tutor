@@ -1,9 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Exercise, Interview, Session, TranscriptTurn, VoiceStatus } from '../../shared/types'
+import type {
+  ChangedFile,
+  Exercise,
+  Interview,
+  Project,
+  Session,
+  TranscriptTurn,
+  VoiceStatus
+} from '../../shared/types'
 import SessionSidebar from './components/SessionSidebar'
 import TranscriptPane from './components/TranscriptPane'
 import Composer from './components/Composer'
 import StudyPanel, { type StudyTab, type WhiteboardState } from './components/StudyPanel'
+import ScaffoldModal from './components/ScaffoldModal'
+
+/** Payload for a pending scaffold-request approval modal. */
+interface ScaffoldRequestState {
+  requestId: string
+  summary: string
+  files: Array<{ path: string; content: string }>
+}
 
 function sortByUpdatedDesc(sessions: Session[]): Session[] {
   return [...sessions].sort(
@@ -37,6 +53,12 @@ export default function App(): JSX.Element {
     return stored === 'open' ? 'open' : 'manual'
   })
   const [ttsSpeaking, setTtsSpeaking] = useState(false)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [sessionProject, setSessionProject] = useState<{
+    project: Project
+    changes: ChangedFile[]
+  } | null>(null)
+  const [scaffoldRequest, setScaffoldRequest] = useState<ScaffoldRequestState | null>(null)
 
   // The event listener is subscribed once; it reads the active session id from a ref.
   const activeSessionIdRef = useRef<string | null>(null)
@@ -45,6 +67,9 @@ export default function App(): JSX.Element {
   const whiteboardsRef = useRef<WhiteboardState[]>([])
   // Same pattern as whiteboardsRef, for the exercise history.
   const exercisesRef = useRef<Exercise[]>([])
+  // Same pattern as whiteboardsRef — the event listener's closure needs the current
+  // linked project (and its changes) to match 'project-changes' events against.
+  const sessionProjectRef = useRef<{ project: Project; changes: ChangedFile[] } | null>(null)
   // Locally-appended turns get negative ids so they never collide with DB row ids.
   const localIdRef = useRef(-1)
 
@@ -83,6 +108,8 @@ export default function App(): JSX.Element {
     exercisesRef.current = []
     setExercises([])
     setExerciseIndex(0)
+    sessionProjectRef.current = null
+    setSessionProject(null)
     setTab('whiteboard')
     // Switching sessions leaves any in-progress interview behind.
     setInterviewActive(false)
@@ -90,9 +117,10 @@ export default function App(): JSX.Element {
     nudgeCountRef.current = 0
     setTurns([])
     try {
-      const [transcript, state] = await Promise.all([
+      const [transcript, state, projectState] = await Promise.all([
         window.tutor.getTranscript(id),
-        window.tutor.getSessionState(id)
+        window.tutor.getSessionState(id),
+        window.tutor.getSessionProjectState(id)
       ])
       // Guard against a session switch racing this load.
       if (activeSessionIdRef.current === id) {
@@ -108,6 +136,8 @@ export default function App(): JSX.Element {
         exercisesRef.current = state.exercises
         setExercises(state.exercises)
         setExerciseIndex(state.exercises.length > 0 ? state.exercises.length - 1 : 0)
+        sessionProjectRef.current = projectState
+        setSessionProject(projectState)
         if (state.whiteboards.length === 0 && state.exercises.length > 0) {
           setTab('exercise')
         }
@@ -155,6 +185,29 @@ export default function App(): JSX.Element {
       // the session-id filter below, which only applies to session-scoped events.
       if (event.type === 'speaking') {
         setTtsSpeaking(event.active)
+        return
+      }
+
+      // 'project-changes' is a global watcher feed (sessionId is '' when no session
+      // is linked) — match it against the currently-linked project instead of the
+      // active session, and handle it before the session filter below.
+      if (event.type === 'project-changes') {
+        if (sessionProjectRef.current !== null && sessionProjectRef.current.project.id === event.projectId) {
+          const next = { project: sessionProjectRef.current.project, changes: event.files }
+          sessionProjectRef.current = next
+          setSessionProject(next)
+        }
+        return
+      }
+
+      // 'scaffold-request' must never be missed even if it arrives for a session
+      // that isn't currently active, so it's handled before the session filter too.
+      if (event.type === 'scaffold-request') {
+        setScaffoldRequest({
+          requestId: event.requestId,
+          summary: event.summary,
+          files: event.files
+        })
         return
       }
 
@@ -236,6 +289,17 @@ export default function App(): JSX.Element {
           setSelectedInterviewId(event.interview.id)
           setTab('interviews')
           break
+        case 'project-linked': {
+          const next = { project: event.project, changes: [] }
+          sessionProjectRef.current = next
+          setSessionProject(next)
+          void window.tutor
+            .listProjects()
+            .then((list) => setProjects(list))
+            .catch(() => {})
+          setTab('projects')
+          break
+        }
       }
     })
     return unsubscribe
@@ -248,6 +312,20 @@ export default function App(): JSX.Element {
       .listInterviews()
       .then((list) => {
         if (!cancelled) setInterviews(list)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Load known projects once on mount.
+  useEffect(() => {
+    let cancelled = false
+    window.tutor
+      .listProjects()
+      .then((list) => {
+        if (!cancelled) setProjects(list)
       })
       .catch(() => {})
     return () => {
@@ -367,6 +445,61 @@ export default function App(): JSX.Element {
     )
     exercisesRef.current = next
     setExercises(next)
+  }, [])
+
+  // Opens the native folder picker (via main) and attaches the chosen directory as a
+  // project linked to the active session. Refreshes both the project list and the
+  // active-session project state on success; null means the picker was cancelled.
+  const handleAttachProject = useCallback(async () => {
+    const sessionId = activeSessionIdRef.current
+    if (!sessionId) return
+    try {
+      const p = await window.tutor.attachProject(sessionId)
+      if (p) {
+        const [list, projectState] = await Promise.all([
+          window.tutor.listProjects(),
+          window.tutor.getSessionProjectState(sessionId)
+        ])
+        setProjects(list)
+        sessionProjectRef.current = projectState
+        setSessionProject(projectState)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to attach project')
+    }
+  }, [])
+
+  // Optimistically flips the push mode in both the projects list and the active
+  // session's project (if it's the same project), then persists via the bridge.
+  const handlePushModeChange = useCallback(
+    (projectId: string, mode: Project['pushMode']) => {
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, pushMode: mode } : p)))
+      if (sessionProjectRef.current !== null && sessionProjectRef.current.project.id === projectId) {
+        const next = {
+          project: { ...sessionProjectRef.current.project, pushMode: mode },
+          changes: sessionProjectRef.current.changes
+        }
+        sessionProjectRef.current = next
+        setSessionProject(next)
+      }
+      window.tutor.setProjectPushMode(projectId, mode).catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Failed to update push mode')
+      })
+    },
+    []
+  )
+
+  const handleOpenProject = useCallback((projectId: string, target: 'editor' | 'finder') => {
+    window.tutor.openProject(projectId, target).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Failed to open project')
+    })
+  }, [])
+
+  const handleScaffoldRespond = useCallback((requestId: string, approved: boolean) => {
+    setScaffoldRequest(null)
+    window.tutor.respondScaffold(requestId, approved).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Failed to respond to scaffold request')
+    })
   }, [])
 
   const handleStop = useCallback(() => {
@@ -503,7 +636,16 @@ export default function App(): JSX.Element {
         onSelectInterview={setSelectedInterviewId}
         interviewActive={interviewActive}
         onStudentActivity={markStudentActivity}
+        projects={projects}
+        sessionProject={sessionProject}
+        onAttachProject={() => void handleAttachProject()}
+        onProjectPushModeChange={handlePushModeChange}
+        onOpenProject={handleOpenProject}
       />
+
+      {scaffoldRequest !== null && (
+        <ScaffoldModal request={scaffoldRequest} onRespond={handleScaffoldRespond} />
+      )}
     </div>
   )
 }

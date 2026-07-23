@@ -1,7 +1,8 @@
 import { ipcMain, systemPreferences } from 'electron'
 import { IPC } from '../shared/types'
-import type { DbApi, LastRun } from '../shared/types'
+import type { DbApi, LastRun, Project } from '../shared/types'
 import type { Instructor } from './instructor'
+import type { ProjectsService } from './projects'
 import { runCode } from './runner'
 import { sttStatus, transcribe } from './stt'
 import type { Speaker } from './tts'
@@ -10,7 +11,8 @@ export function registerIpc(
   db: DbApi,
   instructor: Instructor,
   runStore: Map<string, LastRun>,
-  speaker: Speaker
+  speaker: Speaker,
+  projects: ProjectsService
 ): void {
   ipcMain.handle(IPC.send, (_event, sessionId: string, text: string) => {
     // Fire and forget — progress streams back to the renderer as TutorEvents.
@@ -36,6 +38,31 @@ export function registerIpc(
   ipcMain.handle(IPC.listProgress, () => db.listProgress())
 
   ipcMain.handle(IPC.listInterviews, () => db.listInterviews())
+
+  ipcMain.handle(IPC.listProjects, () => db.listProjects())
+
+  ipcMain.handle(IPC.attachProject, (_event, sessionId: string) =>
+    projects.attachViaPicker(sessionId)
+  )
+
+  ipcMain.handle(IPC.sessionProjectState, async (_event, sessionId: string) => {
+    const project = db.getSessionProject(sessionId)
+    if (!project) return null
+    return { project, changes: await projects.currentChanges(project) }
+  })
+
+  ipcMain.handle(IPC.projectPushMode, (_event, projectId: string, mode: Project['pushMode']) => {
+    db.setProjectPushMode(projectId, mode)
+  })
+
+  ipcMain.handle(IPC.respondScaffold, (_event, requestId: string, approved: boolean) => {
+    projects.respondScaffold(requestId, approved)
+  })
+
+  ipcMain.handle(IPC.openProject, (_event, projectId: string, target: 'editor' | 'finder') => {
+    const project = db.getProject(projectId)
+    if (project) projects.openIn(project, target)
+  })
 
   ipcMain.handle(
     IPC.interviewNudge,

@@ -13,6 +13,12 @@ const bridge: TutorBridge = {
   listExercises: () => ipcRenderer.invoke(IPC.listExercises),
   listProgress: () => ipcRenderer.invoke(IPC.listProgress),
   listInterviews: () => ipcRenderer.invoke(IPC.listInterviews),
+  listProjects: () => ipcRenderer.invoke(IPC.listProjects),
+  attachProject: (sessionId) => ipcRenderer.invoke(IPC.attachProject, sessionId),
+  getSessionProjectState: (sessionId) => ipcRenderer.invoke(IPC.sessionProjectState, sessionId),
+  setProjectPushMode: (projectId, mode) => ipcRenderer.invoke(IPC.projectPushMode, projectId, mode),
+  respondScaffold: (requestId, approved) => ipcRenderer.invoke(IPC.respondScaffold, requestId, approved),
+  openProject: (projectId, target) => ipcRenderer.invoke(IPC.openProject, projectId, target),
   sendInterviewNudge: (sessionId, idleSeconds, nudgeNumber) =>
     ipcRenderer.invoke(IPC.interviewNudge, sessionId, idleSeconds, nudgeNumber),
   getSessionState: (sessionId) => ipcRenderer.invoke(IPC.sessionState, sessionId),

@@ -1,11 +1,12 @@
 import type { KeyboardEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
-import type { Exercise, Interview } from '../../../shared/types'
+import type { ChangedFile, Exercise, Interview, Project } from '../../../shared/types'
 import ReplPane from './ReplPane'
 import InterviewsPane from './InterviewsPane'
+import ProjectsPane from './ProjectsPane'
 import LibraryPane from './LibraryPane'
 
-export type StudyTab = 'whiteboard' | 'exercise' | 'interviews' | 'library'
+export type StudyTab = 'whiteboard' | 'exercise' | 'interviews' | 'projects' | 'library'
 
 export interface WhiteboardState {
   markdown: string
@@ -30,6 +31,11 @@ interface StudyPanelProps {
   onSelectInterview: (id: string | null) => void
   interviewActive: boolean
   onStudentActivity: () => void
+  projects: Project[]
+  sessionProject: { project: Project; changes: ChangedFile[] } | null
+  onAttachProject: () => void
+  onProjectPushModeChange: (projectId: string, mode: Project['pushMode']) => void
+  onOpenProject: (projectId: string, target: 'editor' | 'finder') => void
 }
 
 /** Formats a whiteboard timestamp: "14:32" for today, "Jul 10" otherwise. */
@@ -62,7 +68,12 @@ export default function StudyPanel({
   selectedInterviewId,
   onSelectInterview,
   interviewActive,
-  onStudentActivity
+  onStudentActivity,
+  projects,
+  sessionProject,
+  onAttachProject,
+  onProjectPushModeChange,
+  onOpenProject
 }: StudyPanelProps): JSX.Element {
   const hasWhiteboards = whiteboards.length > 0
   const current = hasWhiteboards ? whiteboards[whiteboardIndex] : null
@@ -126,6 +137,15 @@ export default function StudyPanel({
         >
           {interviewActive && <span className="interview-live-dot" aria-hidden="true" />}
           Interviews
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'projects'}
+          className={tab === 'projects' ? 'study-tab study-tab-active' : 'study-tab'}
+          onClick={() => onTabChange('projects')}
+        >
+          Projects
         </button>
         <button
           type="button"
@@ -231,6 +251,18 @@ export default function StudyPanel({
             interviews={interviews}
             selectedId={selectedInterviewId}
             onSelect={onSelectInterview}
+          />
+        )}
+
+        {tab === 'projects' && (
+          <ProjectsPane
+            projects={projects}
+            sessionProject={sessionProject}
+            sessionId={sessionId}
+            onAttach={onAttachProject}
+            onPushModeChange={onProjectPushModeChange}
+            onOpen={onOpenProject}
+            onStudentMessage={onStudentMessage}
           />
         )}
 

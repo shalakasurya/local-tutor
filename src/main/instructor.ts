@@ -27,6 +27,12 @@ How the classroom works:
 - When it's time to practice, use create_exercise to open an exercise in the student's live editor, then discuss it verbally. The student can run their code and see the output; when they submit for review or ask about their code, ALWAYS call read_student_code first so your feedback is about their actual code and its real output.
 - Use record_progress whenever you learn something about the student's mastery of a topic — strengths and struggles alike.
 
+Project mode (pair programming in the student's own editor):
+- When the student wants to build a real project, first agree on WHAT to build and confirm they want it created on disk, then call create_project — a folder picker opens on their screen and their choice of location is the consent. Never call it unprompted.
+- Offer to scaffold boilerplate with scaffold_project_files (they approve every file), but let the student write the interesting code themselves — you are the teammate, not the typist.
+- You can see their real code: list_project_files, read_project_file, and get_project_changes (diff since you last looked). ALWAYS read the actual code before commenting on it. When told files changed, review the diff before responding.
+- Guide like a good pair-programming teammate: comment on what they actually wrote, ask about intent, point at concrete lines, celebrate working increments, and suggest the next small step. Tie the work to lesson plans and record_progress as usual.
+
 Mock interviews:
 - When the student asks for a mock interview, confirm the type (behavioral, coding, frontend concepts, or system design) and level (junior/mid/senior) if unclear, then call start_interview.
 - During an interview you are the INTERVIEWER, not the tutor: ask one question at a time, probe with realistic follow-ups, stay neutral, give hints only reluctantly, never teach or reveal scores mid-interview. For coding questions use create_exercise, and review submissions with read_student_code the way an interviewer would.
@@ -50,11 +56,23 @@ export class Instructor {
   // contains pending code-execution tool uses.
   private containers = new Map<string, string>()
 
+  private projects: import('./projects').ProjectsService | null = null
+
   constructor(
     private db: DbApi,
     private emit: (event: TutorEvent) => void,
     private getLastRun: (sessionId: string) => LastRun | null = () => null
   ) {}
+
+  /** Late-bound to avoid a construction cycle (the service's hooks call back into us). */
+  attachProjects(projects: import('./projects').ProjectsService): void {
+    this.projects = projects
+  }
+
+  /** Whether a response is currently streaming for this session. */
+  isBusy(sessionId: string): boolean {
+    return this.activeStreams.has(sessionId)
+  }
 
   // Lazy so a missing API key surfaces as an in-app error on first message
   // instead of crashing the app at startup. The zero-arg client resolves
@@ -138,6 +156,14 @@ export class Instructor {
         const title = compact.length > 48 ? `${compact.slice(0, 48)}…` : compact
         if (title) this.db.updateSessionTitle(sessionId, title)
       }
+      // Session linked to a project? Remind the model to look at real code.
+      const projectNote = this.projects?.projectNoteFor(sessionId)
+      if (projectNote) {
+        messages.push({
+          role: 'user',
+          content: `<system-reminder>\n${projectNote}\n</system-reminder>`
+        })
+      }
       messages.push({ role: 'user', content: text })
     }
     this.emit({ type: 'turn-start', sessionId })
@@ -146,7 +172,8 @@ export class Instructor {
       sessionId,
       db: this.db,
       emit: this.emit,
-      getLastRun: this.getLastRun
+      getLastRun: this.getLastRun,
+      projects: this.projects
     }
     const spoken: string[] = []
 

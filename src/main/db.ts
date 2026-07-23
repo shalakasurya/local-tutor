@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import type {
   DbApi,
   Exercise,
+  Project,
   Interview,
   InterviewScore,
   Lesson,
@@ -55,6 +56,26 @@ interface ProgressRow {
   mastery: ProgressNote['mastery']
   note: string
   created_at: string
+}
+
+interface ProjectRow {
+  id: string
+  name: string
+  path: string
+  push_mode: Project['pushMode']
+  created_at: string
+  last_checkpoint_at: string | null
+}
+
+function toProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    path: row.path,
+    pushMode: row.push_mode,
+    createdAt: row.created_at,
+    lastCheckpointAt: row.last_checkpoint_at
+  }
 }
 
 interface InterviewRow {
@@ -192,6 +213,18 @@ export function createDb(dbPath: string): DbApi {
       markdown TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL UNIQUE,
+      push_mode TEXT NOT NULL DEFAULT 'quiet',
+      created_at TEXT NOT NULL,
+      last_checkpoint_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS session_projects (
+      session_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS interviews (
       id TEXT PRIMARY KEY,
       session_id TEXT,
@@ -256,6 +289,28 @@ export function createDb(dbPath: string): DbApi {
   )
   const selectWhiteboards = db.prepare(
     'SELECT * FROM whiteboards WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
+  )
+
+  const insertProject = db.prepare(
+    "INSERT INTO projects (id, name, path, push_mode, created_at, last_checkpoint_at) VALUES (?, ?, ?, 'quiet', ?, NULL)"
+  )
+  const selectProjects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC')
+  const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?')
+  const selectProjectByPath = db.prepare('SELECT * FROM projects WHERE path = ?')
+  const updateProjectPushMode = db.prepare('UPDATE projects SET push_mode = ? WHERE id = ?')
+  const updateProjectCheckpoint = db.prepare(
+    'UPDATE projects SET last_checkpoint_at = ? WHERE id = ?'
+  )
+  const upsertSessionProject = db.prepare(`
+    INSERT INTO session_projects (session_id, project_id) VALUES (?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET project_id = excluded.project_id
+  `)
+  const selectSessionProject = db.prepare(`
+    SELECT p.* FROM projects p JOIN session_projects sp ON sp.project_id = p.id
+    WHERE sp.session_id = ?
+  `)
+  const selectProjectSession = db.prepare(
+    'SELECT session_id FROM session_projects WHERE project_id = ? ORDER BY rowid DESC LIMIT 1'
   )
 
   const insertInterview = db.prepare(`
@@ -455,6 +510,56 @@ export function createDb(dbPath: string): DbApi {
 
     updateExerciseSolution(id, code, status) {
       updateExerciseSolutionStmt.run(code, status, id)
+    },
+
+    createProject(input) {
+      const id = randomUUID()
+      const createdAt = new Date().toISOString()
+      insertProject.run(id, input.name, input.path, createdAt)
+      return {
+        id,
+        name: input.name,
+        path: input.path,
+        pushMode: 'quiet',
+        createdAt,
+        lastCheckpointAt: null
+      }
+    },
+
+    listProjects() {
+      return (selectProjects.all() as ProjectRow[]).map(toProject)
+    },
+
+    getProject(id) {
+      const row = selectProject.get(id) as ProjectRow | undefined
+      return row ? toProject(row) : null
+    },
+
+    getProjectByPath(path) {
+      const row = selectProjectByPath.get(path) as ProjectRow | undefined
+      return row ? toProject(row) : null
+    },
+
+    setProjectPushMode(id, mode) {
+      updateProjectPushMode.run(mode, id)
+    },
+
+    touchProjectCheckpoint(id, at) {
+      updateProjectCheckpoint.run(at, id)
+    },
+
+    linkSessionProject(sessionId, projectId) {
+      upsertSessionProject.run(sessionId, projectId)
+    },
+
+    getSessionProject(sessionId) {
+      const row = selectSessionProject.get(sessionId) as ProjectRow | undefined
+      return row ? toProject(row) : null
+    },
+
+    getProjectSession(projectId) {
+      const row = selectProjectSession.get(projectId) as { session_id: string } | undefined
+      return row ? row.session_id : null
     },
 
     createInterview(input) {

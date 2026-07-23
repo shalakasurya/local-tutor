@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { DbApi, LastRun, TutorEvent } from '../shared/types'
+import type { ProjectsService } from './projects'
 
 export interface ToolContext {
   sessionId: string
@@ -7,6 +8,8 @@ export interface ToolContext {
   emit: (event: TutorEvent) => void
   /** Most recent code run the student performed in this session, if any. */
   getLastRun: (sessionId: string) => LastRun | null
+  /** Project (external-editor pair programming) operations; null before wiring. */
+  projects: ProjectsService | null
 }
 
 // Client-side tools the instructor can call. Descriptions state WHEN to call
@@ -92,6 +95,74 @@ const clientTools: Anthropic.Tool[] = [
       type: 'object',
       properties: {}
     }
+  },
+  {
+    name: 'create_project',
+    description:
+      'Create a real project directory on the student\'s computer for building a complete ' +
+      'project in their own editor (e.g. VS Code). Call ONLY after the student has explicitly ' +
+      'agreed to start a project — this opens a folder picker on their screen where THEY choose ' +
+      'the location (picking a folder is their consent; cancelling means they declined).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Short project name, e.g. "Recipe Finder"' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'scaffold_project_files',
+    description:
+      'Write starter files into the linked project directory. The student sees every file in an ' +
+      'approval dialog and can reject the batch. Use for initial scaffolding or boilerplate the ' +
+      'student should not have to type; prefer letting the student write the interesting code.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'One sentence: what this scaffold sets up' },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Path relative to the project root' },
+              content: { type: 'string' }
+            },
+            required: ['path', 'content']
+          }
+        }
+      },
+      required: ['summary', 'files']
+    }
+  },
+  {
+    name: 'list_project_files',
+    description:
+      'List the files in the linked project directory (build output, deps, and secrets excluded). ' +
+      'Call before reading files when you need to orient yourself.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'read_project_file',
+    description:
+      'Read one file from the linked project. Call whenever your guidance depends on what the ' +
+      'code actually says — never guess at the contents of a file you have not read.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path relative to the project root' }
+      },
+      required: ['path']
+    }
+  },
+  {
+    name: 'get_project_changes',
+    description:
+      'Get a unified diff of everything the student changed in the project since you last ' +
+      'looked, then mark it reviewed. Call when the student asks for a review, mentions recent ' +
+      'edits, or you were told files changed. This is how you "watch them code".',
+    input_schema: { type: 'object', properties: {} }
   },
   {
     name: 'start_interview',
@@ -249,6 +320,63 @@ export async function executeTool(
         '--- Run output ---',
         lastRun.output || '(no output)'
       ].join('\n')
+    }
+
+    case 'create_project': {
+      if (!ctx.projects) throw new Error('Projects are not available')
+      const project = await ctx.projects.createViaPicker(
+        String(args.name ?? 'Project'),
+        ctx.sessionId
+      )
+      if (!project) {
+        return 'The student cancelled the folder picker — they declined creating the project (or want a different moment). Do not retry unless they ask again.'
+      }
+      return `Project "${project.name}" created at ${project.path} and linked to this session. You can now scaffold starter files (with their approval) and follow their edits.`
+    }
+
+    case 'scaffold_project_files': {
+      if (!ctx.projects) throw new Error('Projects are not available')
+      const project = ctx.projects.linkedProject(ctx.sessionId)
+      if (!project) return 'No project is linked to this session — create or attach one first.'
+      const files = Array.isArray(args.files)
+        ? (args.files as Array<Record<string, unknown>>).map((f) => ({
+            path: String(f.path ?? ''),
+            content: String(f.content ?? '')
+          }))
+        : []
+      if (files.length === 0) return 'No files were provided.'
+      const approved = await ctx.projects.scaffold(
+        ctx.sessionId,
+        project,
+        String(args.summary ?? ''),
+        files
+      )
+      return approved
+        ? `Scaffolded ${files.length} file(s) into ${project.name}. Walk the student through what each file does.`
+        : 'The student declined (or did not respond to) the scaffold request — ask what they would prefer.'
+    }
+
+    case 'list_project_files': {
+      if (!ctx.projects) throw new Error('Projects are not available')
+      const project = ctx.projects.linkedProject(ctx.sessionId)
+      if (!project) return 'No project is linked to this session.'
+      const files = await ctx.projects.projectFiles(project)
+      return files.length > 0 ? files.join('\n') : '(project is empty)'
+    }
+
+    case 'read_project_file': {
+      if (!ctx.projects) throw new Error('Projects are not available')
+      const project = ctx.projects.linkedProject(ctx.sessionId)
+      if (!project) return 'No project is linked to this session.'
+      return ctx.projects.readProjectFile(project, String(args.path ?? ''))
+    }
+
+    case 'get_project_changes': {
+      if (!ctx.projects) throw new Error('Projects are not available')
+      const project = ctx.projects.linkedProject(ctx.sessionId)
+      if (!project) return 'No project is linked to this session.'
+      const diff = await ctx.projects.reviewChanges(project)
+      return diff.length > 0 ? diff : 'No changes since you last looked.'
     }
 
     case 'start_interview': {

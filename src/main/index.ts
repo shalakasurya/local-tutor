@@ -6,6 +6,7 @@ import type { LastRun, TutorEvent } from '../shared/types'
 import { createDb } from './db'
 import { Instructor } from './instructor'
 import { registerIpc } from './ipc'
+import { ProjectsService } from './projects'
 import { sttStatus } from './stt'
 import { Speaker } from './tts'
 
@@ -50,7 +51,20 @@ app.whenReady().then(() => {
   }
   const instructor = new Instructor(db, emit, (sessionId) => runStore.get(sessionId) ?? null)
 
-  registerIpc(db, instructor, runStore, speaker)
+  const projects = new ProjectsService(db, join(app.getPath('userData'), 'shadow'), emit, {
+    isBusy: (sessionId) => instructor.isBusy(sessionId),
+    hasActiveInterview: (sessionId) => db.getActiveInterview(sessionId) !== null,
+    injectNote: (sessionId, note) => {
+      instructor.handleStudentMessage(sessionId, note, { hidden: true }).catch((err) => {
+        console.error(err)
+      })
+    },
+    getWindow: () => win
+  })
+  instructor.attachProjects(projects)
+  projects.startAll()
+
+  registerIpc(db, instructor, runStore, speaker, projects)
   createWindow()
 
   app.on('activate', () => {

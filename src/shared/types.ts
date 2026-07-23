@@ -50,6 +50,25 @@ export interface WhiteboardSnapshot {
   createdAt: string
 }
 
+// ---------- Projects (external-editor pair programming) ----------
+
+export interface Project {
+  id: string
+  name: string
+  /** Absolute path of the project directory on disk. */
+  path: string
+  /** 'quiet' = tutor only looks when asked; 'active' = proactive pair-programming comments. */
+  pushMode: 'quiet' | 'active'
+  createdAt: string
+  lastCheckpointAt: string | null
+}
+
+export interface ChangedFile {
+  path: string
+  /** Two-char git porcelain status, e.g. " M", "??", "A " */
+  status: string
+}
+
 // ---------- Mock interviews ----------
 
 export interface InterviewScore {
@@ -166,6 +185,17 @@ export interface DbApi {
   /** All whiteboard snapshots for a session, oldest first. */
   listWhiteboards(sessionId: string): WhiteboardSnapshot[]
 
+  createProject(input: { name: string; path: string }): Project
+  listProjects(): Project[]
+  getProject(id: string): Project | null
+  getProjectByPath(path: string): Project | null
+  setProjectPushMode(id: string, mode: Project['pushMode']): void
+  touchProjectCheckpoint(id: string, at: string): void
+  linkSessionProject(sessionId: string, projectId: string): void
+  getSessionProject(sessionId: string): Project | null
+  /** Most recently linked session for a project (for watcher events / push comments). */
+  getProjectSession(projectId: string): string | null
+
   createInterview(input: { sessionId: string; kind: string; level: string }): Interview
   /** Latest in-progress interview for a session, if any. */
   getActiveInterview(sessionId: string): Interview | null
@@ -200,6 +230,19 @@ export type TutorEvent =
   | { type: 'speaking'; sessionId: string; active: boolean }
   | { type: 'interview-started'; sessionId: string; interview: Interview }
   | { type: 'interview-completed'; sessionId: string; interview: Interview }
+  /** A project was created (via tutor tool) or attached (via UI) and linked to the session. */
+  | { type: 'project-linked'; sessionId: string; project: Project }
+  /** Live watcher feed: files changed on disk since the last checkpoint. Global — sessionId is the linked session ('' if none). */
+  | { type: 'project-changes'; sessionId: string; projectId: string; files: ChangedFile[] }
+  /** The tutor wants to write files — show the approval modal. Resolved via respondScaffold. */
+  | {
+      type: 'scaffold-request'
+      sessionId: string
+      requestId: string
+      projectId: string
+      summary: string
+      files: Array<{ path: string; content: string }>
+    }
 
 // ---------- Bridge exposed on window.tutor by the preload script ----------
 
@@ -221,6 +264,18 @@ export interface TutorBridge {
   listProgress(): Promise<ProgressNote[]>
   /** Completed mock-interview reports across all sessions, newest first. */
   listInterviews(): Promise<Interview[]>
+  listProjects(): Promise<Project[]>
+  /** Opens the native folder picker and attaches the chosen existing directory as a project linked to the session. Null if cancelled. */
+  attachProject(sessionId: string): Promise<Project | null>
+  /** The project linked to a session plus its current uncommitted changes. */
+  getSessionProjectState(
+    sessionId: string
+  ): Promise<{ project: Project; changes: ChangedFile[] } | null>
+  setProjectPushMode(projectId: string, mode: Project['pushMode']): Promise<void>
+  /** Resolve a pending scaffold-request approval modal. */
+  respondScaffold(requestId: string, approved: boolean): Promise<void>
+  /** Open the project in the system editor ('editor' tries VS Code, falls back to Finder). */
+  openProject(projectId: string, target: 'editor' | 'finder'): Promise<void>
   /**
    * Notify the interviewer that the candidate has been idle (interview mode only).
    * The instructor responds with a natural spoken check-in; nothing is added to the
@@ -268,6 +323,12 @@ export const IPC = {
   listProgress: 'progress:list',
   listInterviews: 'interviews:list',
   interviewNudge: 'interview:nudge',
+  listProjects: 'projects:list',
+  attachProject: 'projects:attach',
+  sessionProjectState: 'projects:session-state',
+  projectPushMode: 'projects:push-mode',
+  respondScaffold: 'projects:respond-scaffold',
+  openProject: 'projects:open',
   runCode: 'exercise:run',
   reportRun: 'exercise:report-run',
   saveExerciseCode: 'exercise:save-code',
