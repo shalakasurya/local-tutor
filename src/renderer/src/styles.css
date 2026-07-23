@@ -830,6 +830,30 @@ button {
   gap: 12px;
 }
 
+/* Full screen: lift the whole pane — requirements, toolbar and editor — over the app
+   window. The toolbar comes along, so Run / Submit / Reset stay available while expanded.
+   z-index sits below .repl-output-scrim (100) so the run-output modal still layers on top;
+   the scrim is a descendant anyway, so it renders above this pane's own content either
+   way. Switching tabs display:none's the keepalive wrapper, which takes this with it. */
+.repl[data-fullscreen='true'] {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  padding: 16px;
+  background: var(--panel);
+}
+
+.repl-btn-fullscreen {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.repl-btn-fullscreen:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
 .repl-prompt {
   flex-shrink: 0;
   border: 1px solid var(--border);

@@ -101,6 +101,9 @@ export default function ReplPane({
   // to absorb it silently fails, and the text spills out over the toolbar and editor.
   const [promptHeight, setPromptHeight] = useState<number | null>(null)
   const [resizing, setResizing] = useState(false)
+  // Lifts the whole pane — requirements, toolbar and editor — over the app window.
+  // Resets on exercise change for free: StudyPanel keys this component by exercise.id.
+  const [fullscreen, setFullscreen] = useState(false)
   const replRef = useRef<HTMLDivElement>(null)
   const promptBodyRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
@@ -166,6 +169,20 @@ export default function ReplPane({
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
   }, [outputOpen])
+
+  // Escape leaves full screen. Skipped while the output modal is open — that has its own
+  // Escape handler and should be the thing Escape closes first.
+  useEffect(() => {
+    if (!fullscreen) return
+    const handler = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || outputOpen) return
+      event.preventDefault()
+      event.stopPropagation()
+      setFullscreen(false)
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [fullscreen, outputOpen])
 
   // Remounting a 'web' result's iframe re-executes the code and replays its
   // console postMessages — clear captured lines whenever the modal opens on a
@@ -322,6 +339,10 @@ export default function ReplPane({
     })()
   }, [runAndReport, pushConsoleReport, onStudentMessage])
 
+  const handleToggleFullscreen = useCallback(() => {
+    setFullscreen((current) => !current)
+  }, [])
+
   const handleShowLastOutput = useCallback(() => {
     setOutputOpen(true)
   }, [])
@@ -407,7 +428,12 @@ export default function ReplPane({
   const sized = promptOpen && promptHeight !== null
 
   return (
-    <div className="repl" ref={replRef} data-resizing={resizing ? 'true' : undefined}>
+    <div
+      className="repl"
+      ref={replRef}
+      data-resizing={resizing ? 'true' : undefined}
+      data-fullscreen={fullscreen ? 'true' : undefined}
+    >
       <details
         className="repl-prompt"
         data-sized={sized ? 'true' : undefined}
@@ -447,6 +473,15 @@ export default function ReplPane({
           <span className="repl-lang-badge">{exercise.language}</span>
         </div>
         <div className="repl-toolbar-right">
+          <button
+            type="button"
+            className="repl-btn repl-btn-fullscreen"
+            onClick={handleToggleFullscreen}
+            aria-pressed={fullscreen}
+            title={fullscreen ? 'Exit full screen (Esc)' : 'Expand the exercise to full screen'}
+          >
+            {fullscreen ? '⤡ Exit full screen' : '⤢ Full screen'}
+          </button>
           <button type="button" className="repl-btn repl-btn-reset" onClick={handleReset}>
             Reset
           </button>
