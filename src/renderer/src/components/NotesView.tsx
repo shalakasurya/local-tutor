@@ -10,6 +10,18 @@ interface NotesViewProps {
   registerRefresh: (fn: (() => void) | null) => void
 }
 
+/** Notes whose session is null, or whose session was deleted, are grouped into a single
+ *  synthetic notebook with this key (never a real session id — session ids are UUIDs). */
+const UNFILED_KEY = '__unfiled__'
+
+interface Notebook {
+  /** sessionId for real notebooks, UNFILED_KEY for the unfiled bucket. */
+  key: string
+  sessionId: string | null
+  title: string
+  notes: Note[]
+}
+
 /** Formats a note timestamp: "14:32" for today, "Jul 10" otherwise. Mirrors
  *  StudyPanel's formatWhiteboardTime so dates read consistently across the app. */
 function formatDate(iso: string): string {
@@ -34,14 +46,43 @@ function topicAnchorId(topic: string): string {
   return `note-topic-${slug || 'untitled'}`
 }
 
+/** Groups a flat, already-ordered note list into [topic, notes] pairs, preserving
+ *  input order (listNotes returns rows ordered by topic then created_at ascending, so
+ *  this keeps topics alphabetical and each topic's entries chronological). */
+function groupByTopic(list: Note[]): Array<[string, Note[]]> {
+  const map = new Map<string, Note[]>()
+  for (const note of list) {
+    const entries = map.get(note.topic)
+    if (entries) {
+      entries.push(note)
+    } else {
+      map.set(note.topic, [note])
+    }
+  }
+  return Array.from(map.entries())
+}
+
+/** The most recently created note in a list (list is assumed non-empty). */
+function latestNote(list: Note[]): Note {
+  let best = list[0]
+  let bestTime = new Date(best.createdAt).getTime()
+  for (const note of list) {
+    const t = new Date(note.createdAt).getTime()
+    if (!Number.isNaN(t) && (Number.isNaN(bestTime) || t > bestTime)) {
+      best = note
+      bestTime = t
+    }
+  }
+  return best
+}
+
 interface NoteEntryProps {
   note: Note
-  sessionTitle: string
   onSave: (id: string, contentMd: string) => void
   onDelete: (id: string) => void
 }
 
-function NoteEntry({ note, sessionTitle, onSave, onDelete }: NoteEntryProps): JSX.Element {
+function NoteEntry({ note, onSave, onDelete }: NoteEntryProps): JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(note.contentMd)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -120,9 +161,7 @@ function NoteEntry({ note, sessionTitle, onSave, onDelete }: NoteEntryProps): JS
             <ReactMarkdown>{note.contentMd}</ReactMarkdown>
           </div>
           <div className="note-card-footer">
-            <span className="note-card-source">
-              {sessionTitle} · {formatDate(note.createdAt)}
-            </span>
+            <span className="note-card-source">{formatDate(note.createdAt)}</span>
             {note.edited && <span className="note-edited-marker">edited</span>}
           </div>
           <div className="note-card-actions">
@@ -149,6 +188,70 @@ function NoteEntry({ note, sessionTitle, onSave, onDelete }: NoteEntryProps): JS
   )
 }
 
+interface NotebookDetailProps {
+  notebook: Notebook
+  onBack: () => void
+  onSave: (id: string, contentMd: string) => void
+  onDelete: (id: string) => void
+  errorBanner: JSX.Element | null
+}
+
+function NotebookDetail({
+  notebook,
+  onBack,
+  onSave,
+  onDelete,
+  errorBanner
+}: NotebookDetailProps): JSX.Element {
+  const topics = useMemo(() => groupByTopic(notebook.notes), [notebook.notes])
+
+  return (
+    <>
+      <div className="notes-header">
+        <button type="button" className="notes-back-btn" onClick={onBack}>
+          ← All notebooks
+        </button>
+        <h1 className="notes-title">{notebook.title}</h1>
+        <span className="notes-count">
+          {notebook.notes.length} note{notebook.notes.length === 1 ? '' : 's'} across{' '}
+          {topics.length} topic{topics.length === 1 ? '' : 's'}
+        </span>
+        <button type="button" className="notes-print-btn" onClick={() => window.print()}>
+          Print
+        </button>
+      </div>
+
+      {errorBanner}
+
+      <div className="notes-body">
+        {topics.length > 3 && (
+          <nav className="notes-topic-index" aria-label="Topics">
+            {topics.map(([topic]) => (
+              <a
+                key={topic}
+                href={`#${topicAnchorId(topic)}`}
+                className="topic-chip notes-topic-chip"
+              >
+                {topic}
+              </a>
+            ))}
+          </nav>
+        )}
+        {topics.map(([topic, entries]) => (
+          <section key={topic} id={topicAnchorId(topic)} className="notes-topic-section">
+            <h2 className="notes-topic-heading">{topic}</h2>
+            <div className="notes-entries">
+              {entries.map((note) => (
+                <NoteEntry key={note.id} note={note} onSave={onSave} onDelete={onDelete} />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </>
+  )
+}
+
 export default function NotesView({
   sessions,
   onBack,
@@ -158,6 +261,9 @@ export default function NotesView({
   const [loading, setLoading] = useState(true)
   const [catchingUp, setCatchingUp] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The notebook the user explicitly opened from the list; null means "show the list"
+  // (unless auto-open kicks in — see activeNotebook below).
+  const [openKey, setOpenKey] = useState<string | null>(null)
 
   // Single reload path for both the initial mount (which runs catch-up distillation
   // first) and event-driven refreshes (which must only re-list — see the header note
@@ -189,30 +295,66 @@ export default function NotesView({
     return () => registerRefresh(null)
   }, [reload, registerRefresh])
 
-  const sessionTitleFor = useCallback(
-    (sessionId: string | null): string => {
-      if (sessionId === null) return 'earlier session'
+  const notebookTitleFor = useCallback(
+    (sessionId: string): string => {
       const session = sessions.find((s) => s.id === sessionId)
-      return session ? session.title : 'earlier session'
+      return session && session.title ? session.title : 'Earlier session'
     },
     [sessions]
   )
 
-  // listNotes() returns rows ordered by topic (alphabetical) then created_at ascending,
-  // so grouping while preserving array order keeps topics alphabetical and each
-  // topic's entries chronological with no extra sorting here.
-  const topics = useMemo(() => {
-    const map = new Map<string, Note[]>()
+  // Groups notes into per-session notebooks (sessions must never mix), ordered by most
+  // recent note. Notes with no session, or whose session was deleted, fall into a single
+  // "Unfiled" notebook shown last regardless of recency.
+  const notebooks = useMemo<Notebook[]>(() => {
+    const bySession = new Map<string, Note[]>()
+    const unfiled: Note[] = []
     for (const note of notes) {
-      const list = map.get(note.topic)
-      if (list) {
-        list.push(note)
+      const knownSession =
+        note.sessionId !== null && sessions.some((s) => s.id === note.sessionId)
+      if (knownSession) {
+        const sessionId = note.sessionId as string
+        const list = bySession.get(sessionId)
+        if (list) {
+          list.push(note)
+        } else {
+          bySession.set(sessionId, [note])
+        }
       } else {
-        map.set(note.topic, [note])
+        unfiled.push(note)
       }
     }
-    return Array.from(map.entries())
-  }, [notes])
+
+    const result: Notebook[] = Array.from(bySession.entries()).map(([sessionId, list]) => ({
+      key: sessionId,
+      sessionId,
+      title: notebookTitleFor(sessionId),
+      notes: list
+    }))
+    result.sort(
+      (a, b) =>
+        new Date(latestNote(b.notes).createdAt).getTime() -
+        new Date(latestNote(a.notes).createdAt).getTime()
+    )
+
+    if (unfiled.length > 0) {
+      result.push({ key: UNFILED_KEY, sessionId: null, title: 'Unfiled', notes: unfiled })
+    }
+    return result
+  }, [notes, sessions, notebookTitleFor])
+
+  // Resolves which notebook (if any) is currently open: either the one the user picked
+  // from the list, or — when there's exactly one notebook — it's opened automatically
+  // (the list would be pointless with a single entry).
+  const activeNotebook = useMemo<Notebook | null>(() => {
+    if (openKey !== null) {
+      const found = notebooks.find((nb) => nb.key === openKey)
+      if (found) return found
+    }
+    return notebooks.length === 1 ? notebooks[0] : null
+  }, [notebooks, openKey])
+
+  const isAutoOpened = activeNotebook !== null && openKey === null
 
   const handleSave = useCallback((id: string, contentMd: string) => {
     setNotes((prev) =>
@@ -232,6 +374,45 @@ export default function NotesView({
     })
   }, [])
 
+  const handleBackFromDetail = useCallback(() => {
+    // With only one notebook the list is skipped entirely, so "back" from it should
+    // leave the notes view altogether rather than bounce to a pointless single-card list.
+    if (isAutoOpened) {
+      onBack()
+    } else {
+      setOpenKey(null)
+    }
+  }, [isAutoOpened, onBack])
+
+  const errorBanner =
+    error !== null ? (
+      <div className="error-banner" role="alert">
+        <span className="error-banner-text">{error}</span>
+        <button
+          type="button"
+          className="error-banner-dismiss"
+          onClick={() => setError(null)}
+          aria-label="Dismiss error"
+        >
+          ×
+        </button>
+      </div>
+    ) : null
+
+  if (activeNotebook !== null) {
+    return (
+      <main className="classroom notes-view">
+        <NotebookDetail
+          notebook={activeNotebook}
+          onBack={handleBackFromDetail}
+          onSave={handleSave}
+          onDelete={handleDelete}
+          errorBanner={errorBanner}
+        />
+      </main>
+    )
+  }
+
   return (
     <main className="classroom notes-view">
       <div className="notes-header">
@@ -240,69 +421,47 @@ export default function NotesView({
         </button>
         <h1 className="notes-title">📓 Study Notes</h1>
         <span className="notes-count">
-          {notes.length} note{notes.length === 1 ? '' : 's'} across {topics.length} topic
-          {topics.length === 1 ? '' : 's'}
+          {notes.length} note{notes.length === 1 ? '' : 's'} across {notebooks.length} notebook
+          {notebooks.length === 1 ? '' : 's'}
         </span>
-        <button type="button" className="notes-print-btn" onClick={() => window.print()}>
-          Print
-        </button>
       </div>
 
-      {error !== null && (
-        <div className="error-banner" role="alert">
-          <span className="error-banner-text">{error}</span>
-          <button
-            type="button"
-            className="error-banner-dismiss"
-            onClick={() => setError(null)}
-            aria-label="Dismiss error"
-          >
-            ×
-          </button>
-        </div>
-      )}
+      {errorBanner}
 
       <div className="notes-body">
         {loading ? (
           <div className="study-empty">
             {catchingUp ? 'Catching up on your notes…' : 'Loading…'}
           </div>
-        ) : notes.length === 0 ? (
+        ) : notebooks.length === 0 ? (
           <div className="study-empty">
             No notes yet — they'll appear as you learn with your tutor.
           </div>
         ) : (
-          <>
-            {topics.length > 3 && (
-              <nav className="notes-topic-index" aria-label="Topics">
-                {topics.map(([topic]) => (
-                  <a
-                    key={topic}
-                    href={`#${topicAnchorId(topic)}`}
-                    className="topic-chip notes-topic-chip"
-                  >
-                    {topic}
-                  </a>
-                ))}
-              </nav>
-            )}
-            {topics.map(([topic, entries]) => (
-              <section key={topic} id={topicAnchorId(topic)} className="notes-topic-section">
-                <h2 className="notes-topic-heading">{topic}</h2>
-                <div className="notes-entries">
-                  {entries.map((note) => (
-                    <NoteEntry
-                      key={note.id}
-                      note={note}
-                      sessionTitle={sessionTitleFor(note.sessionId)}
-                      onSave={handleSave}
-                      onDelete={handleDelete}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
-          </>
+          <div className="notebook-list">
+            {notebooks.map((notebook) => {
+              const topicCount = groupByTopic(notebook.notes).length
+              return (
+                <button
+                  key={notebook.key}
+                  type="button"
+                  className="notebook-row"
+                  onClick={() => setOpenKey(notebook.key)}
+                >
+                  <span className="notebook-row-main">
+                    <span className="notebook-row-title">{notebook.title}</span>
+                    <span className="notebook-row-meta">
+                      {notebook.notes.length} note{notebook.notes.length === 1 ? '' : 's'} ·{' '}
+                      {topicCount} topic{topicCount === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                  <span className="notebook-row-date">
+                    {formatDate(latestNote(notebook.notes).createdAt)}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         )}
       </div>
     </main>

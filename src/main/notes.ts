@@ -118,7 +118,17 @@ export class NotesService {
         slice = slice.slice(-MAX_SLICE_CHARS)
       }
 
-      const entries = await distillNotes(this.getClient(), this.db.listNoteTopics(), slice)
+      // Notebooks are per-session: only this session's topics guide filing, so
+      // different learning paths never cross-pollinate topic names.
+      const sessionTopics = [
+        ...new Set(
+          this.db
+            .listNotes()
+            .filter((n) => n.sessionId === sessionId)
+            .map((n) => n.topic)
+        )
+      ]
+      const entries = await distillNotes(this.getClient(), sessionTopics, slice)
       for (const entry of entries) {
         this.db.createNote({
           topic: entry.topic.trim(),

@@ -2568,6 +2568,57 @@ button {
   border-color: var(--accent);
 }
 
+/* ---------- Notebook list (Study Notes) ---------- */
+
+.notebook-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notebook-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  color: var(--text);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.notebook-row:hover {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.notebook-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notebook-row-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.notebook-row-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.notebook-row-date {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* ---------- Print (Study Notes only) ---------- */
 
 @media print {
@@ -2578,7 +2629,8 @@ button {
 
   .notes-view button,
   .notes-topic-index,
-  .note-card-actions {
+  .note-card-actions,
+  .notebook-list {
     display: none !important;
   }
 
