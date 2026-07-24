@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import type {
   DbApi,
   Exercise,
+  Flashcard,
   Note,
   Project,
   Interview,
@@ -58,6 +59,42 @@ interface ProgressRow {
   mastery: ProgressNote['mastery']
   note: string
   created_at: string
+}
+
+interface FlashcardRow {
+  id: string
+  topic: string
+  front_md: string
+  back_md: string
+  session_id: string | null
+  note_id: string | null
+  ease: number
+  interval_days: number
+  reps: number
+  lapses: number
+  due_at: string
+  last_grade: string | null
+  created_at: string
+  updated_at: string
+}
+
+function toFlashcard(row: FlashcardRow): Flashcard {
+  return {
+    id: row.id,
+    topic: row.topic,
+    frontMd: row.front_md,
+    backMd: row.back_md,
+    sessionId: row.session_id,
+    noteId: row.note_id,
+    ease: row.ease,
+    intervalDays: row.interval_days,
+    reps: row.reps,
+    lapses: row.lapses,
+    dueAt: row.due_at,
+    lastGrade: row.last_grade,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }
 }
 
 interface NoteRow {
@@ -263,6 +300,26 @@ export function createDb(dbPath: string): DbApi {
       scores TEXT NOT NULL,
       report_md TEXT
     );
+    CREATE TABLE IF NOT EXISTS flashcards (
+      id TEXT PRIMARY KEY,
+      topic TEXT NOT NULL,
+      front_md TEXT NOT NULL,
+      back_md TEXT NOT NULL,
+      session_id TEXT,
+      note_id TEXT,
+      ease REAL NOT NULL DEFAULT 2.5,
+      interval_days REAL NOT NULL DEFAULT 0,
+      reps INTEGER NOT NULL DEFAULT 0,
+      lapses INTEGER NOT NULL DEFAULT 0,
+      due_at TEXT NOT NULL,
+      last_grade TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY,
       topic TEXT NOT NULL,
@@ -375,6 +432,23 @@ export function createDb(dbPath: string): DbApi {
   const selectInterviews = db.prepare(
     "SELECT * FROM interviews WHERE status = 'completed' ORDER BY completed_at DESC"
   )
+
+  const insertFlashcard = db.prepare(`
+    INSERT INTO flashcards (id, topic, front_md, back_md, session_id, note_id, ease, interval_days, reps, lapses, due_at, last_grade, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 2.5, 0, 0, 0, ?, NULL, ?, ?)
+  `)
+  const selectFlashcards = db.prepare('SELECT * FROM flashcards ORDER BY due_at ASC')
+  const selectDueFlashcards = db.prepare('SELECT * FROM flashcards WHERE due_at <= ? ORDER BY due_at ASC')
+  const selectFlashcard = db.prepare('SELECT * FROM flashcards WHERE id = ?')
+  const updateFlashcardSrsStmt = db.prepare(`
+    UPDATE flashcards SET ease = ?, interval_days = ?, reps = ?, lapses = ?, due_at = ?, last_grade = ?, updated_at = ? WHERE id = ?
+  `)
+  const deleteFlashcardStmt = db.prepare('DELETE FROM flashcards WHERE id = ?')
+  const selectMeta = db.prepare('SELECT value FROM app_meta WHERE key = ?')
+  const upsertMeta = db.prepare(`
+    INSERT INTO app_meta (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `)
 
   const insertNote = db.prepare(`
     INSERT INTO notes (id, topic, content_md, session_id, edited, created_at, updated_at)
@@ -571,6 +645,67 @@ export function createDb(dbPath: string): DbApi {
 
     updateExerciseSolution(id, code, status) {
       updateExerciseSolutionStmt.run(code, status, id)
+    },
+
+    createFlashcard(input) {
+      const now = new Date().toISOString()
+      const card: Flashcard = {
+        id: randomUUID(),
+        topic: input.topic,
+        frontMd: input.frontMd,
+        backMd: input.backMd,
+        sessionId: input.sessionId,
+        noteId: input.noteId,
+        ease: 2.5,
+        intervalDays: 0,
+        reps: 0,
+        lapses: 0,
+        dueAt: now,
+        lastGrade: null,
+        createdAt: now,
+        updatedAt: now
+      }
+      insertFlashcard.run(card.id, card.topic, card.frontMd, card.backMd, card.sessionId, card.noteId, now, now, now)
+      return card
+    },
+
+    listFlashcards() {
+      return (selectFlashcards.all() as FlashcardRow[]).map(toFlashcard)
+    },
+
+    listDueFlashcards(nowIso) {
+      return (selectDueFlashcards.all(nowIso) as FlashcardRow[]).map(toFlashcard)
+    },
+
+    updateFlashcardSrs(id, srs) {
+      updateFlashcardSrsStmt.run(
+        srs.ease,
+        srs.intervalDays,
+        srs.reps,
+        srs.lapses,
+        srs.dueAt,
+        srs.lastGrade,
+        new Date().toISOString(),
+        id
+      )
+    },
+
+    getFlashcard(id) {
+      const row = selectFlashcard.get(id) as FlashcardRow | undefined
+      return row ? toFlashcard(row) : null
+    },
+
+    deleteFlashcard(id) {
+      deleteFlashcardStmt.run(id)
+    },
+
+    getMeta(key) {
+      const row = selectMeta.get(key) as { value: string } | undefined
+      return row ? row.value : null
+    },
+
+    setMeta(key, value) {
+      upsertMeta.run(key, value)
     },
 
     createNote(input) {

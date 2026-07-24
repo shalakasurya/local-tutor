@@ -37,6 +37,10 @@ interface StudyPanelProps {
   onSelectProject: (projectId: string) => void
   onProjectPushModeChange: (projectId: string, mode: Project['pushMode']) => void
   onOpenProject: (projectId: string, target: 'editor' | 'finder') => void
+  /** Due-flashcard count shown as a badge on the Library tab. 0 hides the badge. */
+  reviewDueCount: number
+  /** Passed through to LibraryPane so App can nudge its flashcard-only refresh on 'review-due'. */
+  registerLibraryRefresh?: (cb: (() => void) | null) => void
 }
 
 /** Formats a whiteboard timestamp: "14:32" for today, "Jul 10" otherwise. */
@@ -75,7 +79,9 @@ export default function StudyPanel({
   onAttachProject,
   onSelectProject,
   onProjectPushModeChange,
-  onOpenProject
+  onOpenProject,
+  reviewDueCount,
+  registerLibraryRefresh
 }: StudyPanelProps): JSX.Element {
   const hasWhiteboards = whiteboards.length > 0
   const current = hasWhiteboards ? whiteboards[whiteboardIndex] : null
@@ -157,6 +163,11 @@ export default function StudyPanel({
           onClick={() => onTabChange('library')}
         >
           Library
+          {reviewDueCount > 0 && (
+            <span className="tab-count-badge" aria-label={`${reviewDueCount} due`}>
+              {reviewDueCount}
+            </span>
+          )}
         </button>
       </div>
 
@@ -269,7 +280,9 @@ export default function StudyPanel({
           />
         )}
 
-        {tab === 'library' && <LibraryPane onStudentMessage={onStudentMessage} />}
+        {tab === 'library' && (
+          <LibraryPane onStudentMessage={onStudentMessage} registerRefresh={registerLibraryRefresh} />
+        )}
 
         {/* The REPL stays mounted across tab switches (just hidden on the
             whiteboard tab) so editor content, scroll position, and pending

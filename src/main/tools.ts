@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { DbApi, LastRun, TutorEvent } from '../shared/types'
 import type { ProjectsService } from './projects'
+import { applyGrade, type ReviewGrade } from './sm2'
 
 export interface ToolContext {
   sessionId: string
@@ -246,6 +247,53 @@ const clientTools: Anthropic.Tool[] = [
     }
   },
   {
+    name: 'create_flashcards',
+    description:
+      'Add flashcards to the student\'s spaced-repetition review deck. Use when the student ' +
+      'asks for flashcards, or sparingly after teaching a crucial concept worth long-term ' +
+      'retention — the automatic note-taker already generates cards for most material.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cards: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              topic: { type: 'string' },
+              front_md: { type: 'string', description: 'The question side' },
+              back_md: { type: 'string', description: 'The concise correct answer (1-3 lines)' }
+            },
+            required: ['topic', 'front_md', 'back_md']
+          }
+        }
+      },
+      required: ['cards']
+    }
+  },
+  {
+    name: 'get_due_flashcards',
+    description:
+      'Fetch the flashcards currently due for review (with their answers, for your grading). ' +
+      'Call when the student agrees to a review session or asks what is due.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'grade_flashcard',
+    description:
+      'Record how the student did on one flashcard after they attempted it. Grades: "again" ' +
+      '(forgot), "hard" (struggled), "good" (recalled with effort), "easy" (instant). Honest ' +
+      'grading is what makes the schedule work — never inflate.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        card_id: { type: 'string' },
+        grade: { type: 'string', enum: ['again', 'hard', 'good', 'easy'] }
+      },
+      required: ['card_id', 'grade']
+    }
+  },
+  {
     name: 'record_progress',
     description:
       'Record what you learned about the student\'s mastery of a topic. ' +
@@ -455,6 +503,67 @@ export async function executeTool(
       }
       ctx.emit({ type: 'interview-completed', sessionId: ctx.sessionId, interview: completed })
       return `Interview report saved (overall ${overallScore}/100). The student can now see it in the Interviews tab — debrief verbally as their tutor.`
+    }
+
+    case 'create_flashcards': {
+      const cards = Array.isArray(args.cards)
+        ? (args.cards as Array<Record<string, unknown>>).filter(
+            (c) => c.topic && c.front_md && c.back_md
+          )
+        : []
+      for (const c of cards) {
+        ctx.db.createFlashcard({
+          topic: String(c.topic).trim(),
+          frontMd: String(c.front_md).trim(),
+          backMd: String(c.back_md).trim(),
+          sessionId: ctx.sessionId,
+          noteId: null
+        })
+      }
+      ctx.emit({
+        type: 'review-due',
+        sessionId: ctx.sessionId,
+        dueCount: ctx.db.listDueFlashcards(new Date().toISOString()).length
+      })
+      return `Added ${cards.length} flashcard(s) to the review deck.`
+    }
+
+    case 'get_due_flashcards': {
+      const due = ctx.db.listDueFlashcards(new Date().toISOString()).slice(0, 20)
+      if (due.length === 0) return 'No flashcards are due right now.'
+      return due
+        .map(
+          (c) =>
+            `[${c.id}] (${c.topic}${c.lapses > 0 ? `, ${c.lapses} lapse(s)` : ''})\nQ: ${c.frontMd}\nA: ${c.backMd}`
+        )
+        .join('\n\n')
+    }
+
+    case 'grade_flashcard': {
+      const card = ctx.db.getFlashcard(String(args.card_id ?? ''))
+      if (!card) return 'Unknown card id.'
+      const grade = String(args.grade ?? 'good') as ReviewGrade
+      const next = applyGrade(
+        { ease: card.ease, intervalDays: card.intervalDays, reps: card.reps, lapses: card.lapses },
+        grade,
+        new Date()
+      )
+      ctx.db.updateFlashcardSrs(card.id, {
+        ease: next.ease,
+        intervalDays: next.intervalDays,
+        reps: next.reps,
+        lapses: next.lapses,
+        dueAt: next.dueAt,
+        lastGrade: grade
+      })
+      ctx.emit({
+        type: 'review-due',
+        sessionId: ctx.sessionId,
+        dueCount: ctx.db.listDueFlashcards(new Date().toISOString()).length
+      })
+      return grade === 'again'
+        ? 'Graded "again" — the card will come back in about 10 minutes; retry it before ending the review.'
+        : `Graded "${grade}" — next review in ${next.intervalDays < 1 ? 'under a day' : `${Math.round(next.intervalDays)} day(s)`}.`
     }
 
     case 'record_progress': {

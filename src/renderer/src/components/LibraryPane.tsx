@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { MouseEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
-import type { Lesson, ProgressNote } from '../../../shared/types'
+import type { Flashcard, Lesson, ProgressNote } from '../../../shared/types'
 import { dueForReview, summarizeTopics } from '../lib/review'
 import type { TopicStatus } from '../lib/review'
 
 interface LibraryPaneProps {
   onStudentMessage: (text: string) => void
+  /** Registers (on mount) / unregisters (on unmount, via null) a listFlashcards-only
+   *  refresh callback that App invokes when a 'review-due' event arrives while this
+   *  pane is open (mirrors NotesView's registerRefresh). */
+  registerRefresh?: (cb: (() => void) | null) => void
 }
 
 type Section = 'review' | 'lessons' | 'progress'
@@ -58,6 +63,46 @@ function daysAgoLabel(iso: string, now: Date): string {
   return `last touched ${n} days ago`
 }
 
+/** Relative "due" label for a flashcard chip: "due now" once dueAt has passed,
+ *  otherwise a short "due in Xh" / "due in 1 day" / "due in N days" countdown. */
+function dueLabel(dueAt: string, now: Date): string {
+  const due = Date.parse(dueAt)
+  if (Number.isNaN(due)) return 'due now'
+  const diffMs = due - now.getTime()
+  if (diffMs <= 0) return 'due now'
+  const diffHours = Math.round(diffMs / (1000 * 60 * 60))
+  if (diffHours < 1) return 'due in <1h'
+  if (diffHours < 24) return `due in ${diffHours}h`
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24))
+  return diffDays === 1 ? 'due in 1 day' : `due in ${diffDays} days`
+}
+
+function isCardDue(card: Flashcard, now: Date): boolean {
+  const due = Date.parse(card.dueAt)
+  return !Number.isNaN(due) && due <= now.getTime()
+}
+
+interface TopicDeckGroup {
+  topic: string
+  cards: Flashcard[]
+}
+
+/** Groups flashcards by topic (as-authored, no case-folding — flashcard topics are
+ *  tutor-assigned and expected to already be consistent), preserving nothing about
+ *  order beyond grouping; callers sort. */
+function groupCardsByTopic(cards: Flashcard[]): TopicDeckGroup[] {
+  const map = new Map<string, Flashcard[]>()
+  for (const card of cards) {
+    const list = map.get(card.topic)
+    if (list) {
+      list.push(card)
+    } else {
+      map.set(card.topic, [card])
+    }
+  }
+  return Array.from(map.entries()).map(([topic, topicCards]) => ({ topic, cards: topicCards }))
+}
+
 function SegmentedControl({
   section,
   onChange
@@ -90,7 +135,143 @@ function SegmentedControl({
   )
 }
 
-function ReviewSection({
+function CardRow({
+  card,
+  now,
+  onDelete
+}: {
+  card: Flashcard
+  now: Date
+  onDelete: (id: string) => void
+}): JSX.Element {
+  const [revealed, setRevealed] = useState(false)
+  const due = isCardDue(card, now)
+
+  const handleDelete = (e: MouseEvent): void => {
+    e.stopPropagation()
+    if (window.confirm('Delete this flashcard?')) {
+      onDelete(card.id)
+    }
+  }
+
+  return (
+    <div className="card-row">
+      <button
+        type="button"
+        className="card-row-toggle"
+        aria-expanded={revealed}
+        onClick={() => setRevealed((v) => !v)}
+      >
+        <div className="card-row-front">{card.frontMd}</div>
+        {revealed && (
+          <div className="card-row-back markdown-body">
+            <ReactMarkdown>{card.backMd}</ReactMarkdown>
+          </div>
+        )}
+      </button>
+      <div className="card-row-meta">
+        {card.reps > 0 && (
+          <span
+            className="card-reps-tag"
+            title={card.lapses > 0 ? `${card.lapses} lapse${card.lapses === 1 ? '' : 's'}` : undefined}
+          >
+            ×{card.reps}
+          </span>
+        )}
+        <span className={due ? 'due-chip due-chip-now' : 'due-chip'}>{dueLabel(card.dueAt, now)}</span>
+        <button
+          type="button"
+          className="card-delete-btn"
+          aria-label="Delete flashcard"
+          onClick={handleDelete}
+        >
+          🗑
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function TopicDeck({
+  group,
+  now,
+  onDeleteCard
+}: {
+  group: TopicDeckGroup
+  now: Date
+  onDeleteCard: (id: string) => void
+}): JSX.Element {
+  const sorted = useMemo(() => {
+    const nowMs = now.getTime()
+    return [...group.cards].sort((a, b) => {
+      const aDue = Date.parse(a.dueAt)
+      const bDue = Date.parse(b.dueAt)
+      const aIsDue = !Number.isNaN(aDue) && aDue <= nowMs
+      const bIsDue = !Number.isNaN(bDue) && bDue <= nowMs
+      if (aIsDue !== bIsDue) return aIsDue ? -1 : 1
+      return aDue - bDue
+    })
+  }, [group.cards, now])
+
+  const dueCount = sorted.filter((c) => isCardDue(c, now)).length
+
+  return (
+    <details className="deck-topic">
+      <summary className="deck-topic-summary">
+        <span className="deck-topic-name">{group.topic}</span>
+        <span className="deck-topic-count">
+          {group.cards.length} card{group.cards.length === 1 ? '' : 's'}
+          {dueCount > 0 ? ` · ${dueCount} due` : ''}
+        </span>
+      </summary>
+      <div className="deck-card-list">
+        {sorted.map((card) => (
+          <CardRow key={card.id} card={card} now={now} onDelete={onDeleteCard} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function DeckBrowser({
+  cards,
+  now,
+  onDeleteCard
+}: {
+  cards: Flashcard[]
+  now: Date
+  onDeleteCard: (id: string) => void
+}): JSX.Element {
+  const groups = useMemo(() => {
+    const nowMs = now.getTime()
+    const grouped = groupCardsByTopic(cards)
+    grouped.sort((a, b) => {
+      const aDue = a.cards.filter((c) => isCardDue(c, now)).length
+      const bDue = b.cards.filter((c) => isCardDue(c, now)).length
+      if (aDue !== bDue) return bDue - aDue
+      return a.topic.localeCompare(b.topic)
+    })
+    return grouped
+  }, [cards, now])
+
+  if (cards.length === 0) {
+    return (
+      <div className="study-empty">
+        No flashcards yet — they&apos;ll appear as your tutor creates them.
+      </div>
+    )
+  }
+
+  return (
+    <div className="deck-browser">
+      {groups.map((group) => (
+        <TopicDeck key={group.topic} group={group} now={now} onDeleteCard={onDeleteCard} />
+      ))}
+    </div>
+  )
+}
+
+function TopicsAttentionSection({
   dueTopics,
   now,
   onStudentMessage
@@ -99,10 +280,6 @@ function ReviewSection({
   now: Date
   onStudentMessage: (text: string) => void
 }): JSX.Element {
-  if (dueTopics.length === 0) {
-    return <div className="study-empty">Nothing due for review — nice work.</div>
-  }
-
   const targets = dueTopics.slice(0, MAX_REVIEW_TOPICS)
 
   const handleReview = (): void => {
@@ -113,27 +290,78 @@ function ReviewSection({
   }
 
   return (
+    <div className="topics-attention">
+      <h3 className="topics-attention-heading">Topics needing attention</h3>
+      {dueTopics.length === 0 ? (
+        <div className="study-empty">Nothing due for review — nice work.</div>
+      ) : (
+        <>
+          <button type="button" className="review-now-btn" onClick={handleReview}>
+            Review these now
+          </button>
+          <div className="due-list">
+            {dueTopics.map((topic) => {
+              const latestNote = topic.notes[topic.notes.length - 1]
+              return (
+                <div key={topic.topic.toLowerCase()} className="due-row">
+                  <div className="due-row-header">
+                    <span className="due-row-topic">{topic.topic}</span>
+                    <MasteryBadge mastery={topic.mastery} />
+                  </div>
+                  <div className="due-row-meta">{daysAgoLabel(topic.lastNoteAt, now)}</div>
+                  {latestNote !== undefined && (
+                    <div className="due-row-note">{latestNote.note}</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ReviewSection({
+  cards,
+  dueTopics,
+  now,
+  onStudentMessage,
+  onDeleteCard
+}: {
+  cards: Flashcard[]
+  dueTopics: TopicStatus[]
+  now: Date
+  onStudentMessage: (text: string) => void
+  onDeleteCard: (id: string) => void
+}): JSX.Element {
+  const dueCount = useMemo(() => cards.filter((c) => isCardDue(c, now)).length, [cards, now])
+
+  const handleReviewCards = (): void => {
+    onStudentMessage("Let's review my due flashcards.")
+  }
+
+  return (
     <div className="review-section">
-      <button type="button" className="review-now-btn" onClick={handleReview}>
-        Review these now
-      </button>
-      <div className="due-list">
-        {dueTopics.map((topic) => {
-          const latestNote = topic.notes[topic.notes.length - 1]
-          return (
-            <div key={topic.topic.toLowerCase()} className="due-row">
-              <div className="due-row-header">
-                <span className="due-row-topic">{topic.topic}</span>
-                <MasteryBadge mastery={topic.mastery} />
-              </div>
-              <div className="due-row-meta">{daysAgoLabel(topic.lastNoteAt, now)}</div>
-              {latestNote !== undefined && (
-                <div className="due-row-note">{latestNote.note}</div>
-              )}
-            </div>
-          )
-        })}
+      <div className="deck-summary">
+        <span className="deck-summary-line">
+          {dueCount === 0
+            ? 'No cards due — all caught up 🎉'
+            : `${dueCount} card${dueCount === 1 ? '' : 's'} due`}
+        </span>
+        <button
+          type="button"
+          className="review-now-btn"
+          disabled={dueCount === 0}
+          onClick={handleReviewCards}
+        >
+          Review with tutor
+        </button>
       </div>
+
+      <DeckBrowser cards={cards} now={now} onDeleteCard={onDeleteCard} />
+
+      <TopicsAttentionSection dueTopics={dueTopics} now={now} onStudentMessage={onStudentMessage} />
     </div>
   )
 }
@@ -306,19 +534,24 @@ function ProgressSection({ topics }: { topics: TopicStatus[] }): JSX.Element {
   )
 }
 
-export default function LibraryPane({ onStudentMessage }: LibraryPaneProps): JSX.Element {
+export default function LibraryPane({
+  onStudentMessage,
+  registerRefresh
+}: LibraryPaneProps): JSX.Element {
   const [lessons, setLessons] = useState<Lesson[] | null>(null)
   const [progress, setProgress] = useState<ProgressNote[] | null>(null)
+  const [flashcards, setFlashcards] = useState<Flashcard[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [section, setSection] = useState<Section | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([window.tutor.listLessons(), window.tutor.listProgress()])
-      .then(([lessonList, progressList]) => {
+    Promise.all([window.tutor.listLessons(), window.tutor.listProgress(), window.tutor.listFlashcards()])
+      .then(([lessonList, progressList, flashcardList]) => {
         if (cancelled) return
         setLessons(lessonList)
         setProgress(progressList)
+        setFlashcards(flashcardList)
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -329,23 +562,50 @@ export default function LibraryPane({ onStudentMessage }: LibraryPaneProps): JSX
     }
   }, [])
 
+  // listFlashcards-only reload, exposed to App via registerRefresh so a global
+  // 'review-due' event (card created/graded elsewhere) can refresh the deck
+  // browser without re-fetching lessons/progress (mirrors NotesView's pattern).
+  const reloadFlashcards = useCallback(() => {
+    window.tutor
+      .listFlashcards()
+      .then((list) => setFlashcards(list))
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Failed to load flashcards.')
+      })
+  }, [])
+
+  useEffect(() => {
+    if (registerRefresh === undefined) return undefined
+    registerRefresh(reloadFlashcards)
+    return () => registerRefresh(null)
+  }, [registerRefresh, reloadFlashcards])
+
+  const handleDeleteCard = useCallback((id: string) => {
+    setFlashcards((prev) => (prev === null ? prev : prev.filter((c) => c.id !== id)))
+    window.tutor.deleteFlashcard(id).catch((err: unknown) => {
+      console.error('Failed to delete flashcard', err)
+    })
+  }, [])
+
   const topics = useMemo(() => (progress !== null ? summarizeTopics(progress) : []), [progress])
   const dueTopics = useMemo(() => dueForReview(topics, new Date()), [topics])
 
-  // Default to Review when something's due, else Lessons — but only decide once,
-  // after data has loaded, so we don't flash the wrong default while loading.
+  // Default to Review when something's due (either a topic needing attention or a
+  // due flashcard), else Lessons — but only decide once, after data has loaded, so
+  // we don't flash the wrong default while loading.
   useEffect(() => {
-    if (section === null && progress !== null && lessons !== null) {
-      setSection(dueTopics.length > 0 ? 'review' : 'lessons')
+    if (section === null && progress !== null && lessons !== null && flashcards !== null) {
+      const dueCardCount = flashcards.filter((c) => isCardDue(c, new Date())).length
+      setSection(dueTopics.length > 0 || dueCardCount > 0 ? 'review' : 'lessons')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [progress, lessons])
+  }, [progress, lessons, flashcards])
 
   if (error !== null) {
     return <div className="study-empty">{error}</div>
   }
 
-  if (lessons === null || progress === null || section === null) {
+  if (lessons === null || progress === null || flashcards === null || section === null) {
     return <div className="study-empty">Loading…</div>
   }
 
@@ -354,7 +614,13 @@ export default function LibraryPane({ onStudentMessage }: LibraryPaneProps): JSX
       <SegmentedControl section={section} onChange={setSection} />
       <div className="library-section-body">
         {section === 'review' && (
-          <ReviewSection dueTopics={dueTopics} now={new Date()} onStudentMessage={onStudentMessage} />
+          <ReviewSection
+            cards={flashcards}
+            dueTopics={dueTopics}
+            now={new Date()}
+            onStudentMessage={onStudentMessage}
+            onDeleteCard={handleDeleteCard}
+          />
         )}
         {section === 'lessons' && (
           <LessonsSection lessons={lessons} onStudentMessage={onStudentMessage} />

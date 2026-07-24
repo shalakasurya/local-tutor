@@ -91,6 +91,27 @@ export interface Note {
   updatedAt: string
 }
 
+// ---------- Flashcards (spaced-repetition review) ----------
+
+export interface Flashcard {
+  id: string
+  topic: string
+  frontMd: string
+  backMd: string
+  sessionId: string | null
+  /** Note this card was generated from, when applicable. */
+  noteId: string | null
+  /** SM-2 state. */
+  ease: number
+  intervalDays: number
+  reps: number
+  lapses: number
+  dueAt: string
+  lastGrade: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 // ---------- Projects (external-editor pair programming) ----------
 
 export interface Project {
@@ -227,6 +248,26 @@ export interface DbApi {
   /** All whiteboard snapshots for a session, oldest first. */
   listWhiteboards(sessionId: string): WhiteboardSnapshot[]
 
+  createFlashcard(input: {
+    topic: string
+    frontMd: string
+    backMd: string
+    sessionId: string | null
+    noteId: string | null
+  }): Flashcard
+  listFlashcards(): Flashcard[]
+  listDueFlashcards(nowIso: string): Flashcard[]
+  updateFlashcardSrs(
+    id: string,
+    srs: { ease: number; intervalDays: number; reps: number; lapses: number; dueAt: string; lastGrade: string }
+  ): void
+  getFlashcard(id: string): Flashcard | null
+  deleteFlashcard(id: string): void
+
+  /** Tiny key-value store for app metadata (reminder throttles, backfill flags). */
+  getMeta(key: string): string | null
+  setMeta(key: string, value: string): void
+
   createNote(input: { topic: string; contentMd: string; sessionId: string | null }): Note
   listNotes(): Note[]
   listNoteTopics(): string[]
@@ -289,6 +330,8 @@ export type TutorEvent =
   | { type: 'tts-stop'; sessionId: string }
   /** New study notes were distilled. Global — handle before session filtering. */
   | { type: 'notes-updated'; sessionId: string; created: number }
+  /** Due-flashcard count changed (cards created or graded). Global — handle before session filtering. */
+  | { type: 'review-due'; sessionId: string; dueCount: number }
   | { type: 'interview-started'; sessionId: string; interview: Interview }
   | { type: 'interview-completed'; sessionId: string; interview: Interview }
   /** A project was created (via tutor tool) or attached (via UI) and linked to the session. */
@@ -325,6 +368,9 @@ export interface TutorBridge {
   listProgress(): Promise<ProgressNote[]>
   /** Completed mock-interview reports across all sessions, newest first. */
   listInterviews(): Promise<Interview[]>
+  /** All flashcards (renderer derives due counts from dueAt). */
+  listFlashcards(): Promise<Flashcard[]>
+  deleteFlashcard(cardId: string): Promise<void>
   /** All study notes, every topic. */
   listNotes(): Promise<Note[]>
   /** Edit a note's content (marks it as student-edited). */
@@ -403,6 +449,8 @@ export const IPC = {
   listProgress: 'progress:list',
   listInterviews: 'interviews:list',
   interviewNudge: 'interview:nudge',
+  listFlashcards: 'flashcards:list',
+  deleteFlashcard: 'flashcards:delete',
   listNotes: 'notes:list',
   updateNote: 'notes:update',
   deleteNote: 'notes:delete',

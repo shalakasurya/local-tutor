@@ -41,6 +41,12 @@ export function registerIpc(
 
   ipcMain.handle(IPC.listInterviews, () => db.listInterviews())
 
+  ipcMain.handle(IPC.listFlashcards, () => db.listFlashcards())
+
+  ipcMain.handle(IPC.deleteFlashcard, (_event, cardId: string) => {
+    db.deleteFlashcard(String(cardId))
+  })
+
   ipcMain.handle(IPC.listNotes, () => db.listNotes())
 
   ipcMain.handle(IPC.updateNote, (_event, noteId: string, contentMd: string) => {

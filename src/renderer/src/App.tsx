@@ -63,6 +63,9 @@ export default function App(): JSX.Element {
   const [scaffoldRequest, setScaffoldRequest] = useState<ScaffoldRequestState | null>(null)
   // Which top-level area is showing in place of the classroom + study panel.
   const [view, setView] = useState<'classroom' | 'notes'>('classroom')
+  // Due-flashcard count for the Library tab badge; kept independent of the active
+  // session since flashcard scheduling isn't session-scoped (see 'review-due' below).
+  const [reviewDueCount, setReviewDueCount] = useState(0)
 
   // The event listener is subscribed once; it reads the active session id from a ref.
   const activeSessionIdRef = useRef<string | null>(null)
@@ -80,6 +83,9 @@ export default function App(): JSX.Element {
   // its registerRefresh prop), so the 'notes-updated' event handler can trigger it without
   // re-subscribing the event listener whenever the notes view opens/closes.
   const notesRefreshRef = useRef<(() => void) | null>(null)
+  // Same pattern as notesRefreshRef, for LibraryPane's listFlashcards-only refresh
+  // callback (registered via StudyPanel's registerLibraryRefresh pass-through prop).
+  const libraryRefreshRef = useRef<(() => void) | null>(null)
   // Lazily-created WebAudio player for main-synthesized TTS utterances (see 'tts-audio' below).
   const ttsPlayerRef = useRef<TtsPlayer | null>(null)
   if (ttsPlayerRef.current === null) {
@@ -241,6 +247,16 @@ export default function App(): JSX.Element {
         return
       }
 
+      // 'review-due' is global (cards can be created/graded outside the active
+      // session) — handled before the session filter, same as 'speaking'. Updates
+      // the Library tab badge and nudges LibraryPane's own refresh (listFlashcards
+      // only) if it's currently mounted.
+      if (event.type === 'review-due') {
+        setReviewDueCount(event.dueCount)
+        libraryRefreshRef.current?.()
+        return
+      }
+
       // 'scaffold-request' must never be missed even if it arrives for a session
       // that isn't currently active, so it's handled before the session filter too.
       if (event.type === 'scaffold-request') {
@@ -367,6 +383,27 @@ export default function App(): JSX.Element {
       .listProjects()
       .then((list) => {
         if (!cancelled) setProjects(list)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Derive the initial Library tab due-count once on mount; subsequent changes
+  // arrive via the 'review-due' event above.
+  useEffect(() => {
+    let cancelled = false
+    window.tutor
+      .listFlashcards()
+      .then((list) => {
+        if (cancelled) return
+        const now = Date.now()
+        const due = list.filter((c) => {
+          const t = Date.parse(c.dueAt)
+          return !Number.isNaN(t) && t <= now
+        }).length
+        setReviewDueCount(due)
       })
       .catch(() => {})
     return () => {
@@ -716,6 +753,10 @@ export default function App(): JSX.Element {
             onSelectProject={(id) => void handleSelectProject(id)}
             onProjectPushModeChange={handlePushModeChange}
             onOpenProject={handleOpenProject}
+            reviewDueCount={reviewDueCount}
+            registerLibraryRefresh={(fn) => {
+              libraryRefreshRef.current = fn
+            }}
           />
         </>
       )}

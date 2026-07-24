@@ -74,6 +74,39 @@ app.whenReady().then(() => {
   registerIpc(db, instructor, runStore, speaker, projects, notes)
   createWindow()
 
+  // ---- Review reminders: the teacher surfaces due flashcards on time ----
+  const REVIEW_CHECK_MS = 30 * 60_000
+  const REVIEW_THROTTLE_MS = 4 * 3600_000
+  const checkReviews = (): void => {
+    const due = db.listDueFlashcards(new Date().toISOString())
+    sendToRenderer({ type: 'review-due', sessionId: '', dueCount: due.length })
+    if (due.length === 0) return
+    const last = Number(db.getMeta('last_review_reminder') ?? 0)
+    if (Date.now() - last < REVIEW_THROTTLE_MS) return
+    const target = db.listSessions()[0]
+    if (!target) return
+    if (instructor.isBusy(target.id) || db.getActiveInterview(target.id)) return
+    db.setMeta('last_review_reminder', String(Date.now()))
+    const topics = [...new Set(due.map((c) => c.topic))].slice(0, 5).join(', ')
+    instructor
+      .handleStudentMessage(
+        target.id,
+        `The student has ${due.length} flashcard(s) due for review (topics: ${topics}). As their teacher, ` +
+          `briefly and warmly offer a quick review session out loud — one or two sentences, no pressure. ` +
+          `If they agree, run the review per your flashcard instructions; if they decline or seem ` +
+          `mid-task, let it go gracefully. Do not mention this reminder.`,
+        { hidden: true }
+      )
+      .catch((err) => console.error(err))
+  }
+  setTimeout(checkReviews, 20_000) // shortly after launch, once the window is up
+  setInterval(checkReviews, REVIEW_CHECK_MS)
+
+  // One-time conversion of pre-flashcard notes into cards (flagged per session).
+  setTimeout(() => {
+    notes.backfillCards().catch((err) => console.error('[notes]', err))
+  }, 5_000)
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()

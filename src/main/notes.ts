@@ -20,9 +20,22 @@ const NOTES_SCHEMA = {
         required: ['topic', 'content_md'],
         additionalProperties: false
       }
+    },
+    flashcards: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string' },
+          front_md: { type: 'string' },
+          back_md: { type: 'string' }
+        },
+        required: ['topic', 'front_md', 'back_md'],
+        additionalProperties: false
+      }
     }
   },
-  required: ['entries'],
+  required: ['entries', 'flashcards'],
   additionalProperties: false
 } as const
 
@@ -34,11 +47,24 @@ Rules:
 - Reuse an existing topic name whenever the content fits it; create new topics sparingly, with short reusable names ("React Hooks", not "Discussion about useState on Tuesday").
 - One entry per distinct concept; 1-5 bullets each. No filler, no chit-chat, no encouragement, no logistics.
 - Skip anything already obvious from the existing-topics context or not worth reviewing.
-- If the excerpt contains nothing note-worthy, return an empty entries array.`
+- If the excerpt contains nothing note-worthy, return an empty entries array.
+
+Additionally produce flashcards (0-3 per excerpt) testing retrieval of the most important points: front is a question you would ask the student (specific, answerable without the transcript); back is the concise correct answer (1-3 lines, code allowed). Only card-worthy material — durable concepts, not trivia; empty array if none.`
 
 export interface DistilledNote {
   topic: string
   content_md: string
+}
+
+export interface DistilledCard {
+  topic: string
+  front_md: string
+  back_md: string
+}
+
+export interface DistillResult {
+  entries: DistilledNote[]
+  flashcards: DistilledCard[]
 }
 
 /**
@@ -49,7 +75,7 @@ export async function distillNotes(
   client: Anthropic,
   existingTopics: string[],
   transcriptSlice: string
-): Promise<DistilledNote[]> {
+): Promise<DistillResult> {
   const response = await client.messages.create({
     model: NOTES_MODEL,
     max_tokens: 2000,
@@ -67,11 +93,16 @@ export async function distillNotes(
     ]
   })
   const text = response.content.find((b) => b.type === 'text')
-  if (!text || text.type !== 'text') return []
-  const parsed = JSON.parse(text.text) as { entries?: DistilledNote[] }
-  return Array.isArray(parsed.entries)
-    ? parsed.entries.filter((e) => e.topic && e.content_md)
-    : []
+  if (!text || text.type !== 'text') return { entries: [], flashcards: [] }
+  const parsed = JSON.parse(text.text) as { entries?: DistilledNote[]; flashcards?: DistilledCard[] }
+  return {
+    entries: Array.isArray(parsed.entries)
+      ? parsed.entries.filter((e) => e.topic && e.content_md)
+      : [],
+    flashcards: Array.isArray(parsed.flashcards)
+      ? parsed.flashcards.filter((c) => c.topic && c.front_md && c.back_md)
+      : []
+  }
 }
 
 export class NotesService {
@@ -128,7 +159,7 @@ export class NotesService {
             .map((n) => n.topic)
         )
       ]
-      const entries = await distillNotes(this.getClient(), sessionTopics, slice)
+      const { entries, flashcards } = await distillNotes(this.getClient(), sessionTopics, slice)
       for (const entry of entries) {
         this.db.createNote({
           topic: entry.topic.trim(),
@@ -136,12 +167,30 @@ export class NotesService {
           sessionId
         })
       }
+      for (const card of flashcards) {
+        this.db.createFlashcard({
+          topic: card.topic.trim(),
+          frontMd: card.front_md.trim(),
+          backMd: card.back_md.trim(),
+          sessionId,
+          noteId: null
+        })
+      }
+      if (flashcards.length > 0) {
+        this.emit({
+          type: 'review-due',
+          sessionId,
+          dueCount: this.db.listDueFlashcards(new Date().toISOString()).length
+        })
+      }
       // Advance the watermark even when nothing was note-worthy, so the same
       // turns are never re-analyzed.
       this.db.setNoteWatermark(sessionId, turns[turns.length - 1].id)
       if (entries.length > 0) {
         this.emit({ type: 'notes-updated', sessionId, created: entries.length })
-        console.log(`[notes] +${entries.length} note(s) from session ${sessionId.slice(0, 8)}`)
+      }
+      if (entries.length > 0 || flashcards.length > 0) {
+        console.log(`[notes] +${entries.length} note(s), +${flashcards.length} card(s) from session ${sessionId.slice(0, 8)}`)
       }
       return entries.length
     } finally {
@@ -160,5 +209,55 @@ export class NotesService {
       }
     }
     return { created }
+  }
+
+  /**
+   * One-time conversion of a session's EXISTING notes into flashcards (for
+   * notes distilled before flashcards shipped). Flagged per session in app_meta.
+   */
+  async backfillCards(): Promise<number> {
+    let created = 0
+    for (const session of this.db.listSessions()) {
+      const flag = `cards_backfilled_${session.id}`
+      if (this.db.getMeta(flag) !== null) continue
+      const sessionNotes = this.db.listNotes().filter((n) => n.sessionId === session.id)
+      if (sessionNotes.length === 0) continue
+      try {
+        const notesText = sessionNotes
+          .map((n) => `## ${n.topic}\n${n.contentMd}`)
+          .join('\n\n')
+        const { flashcards } = await distillNotes(
+          this.getClient(),
+          [],
+          `These are the student's existing study notes. Produce flashcards from them (1-2 per distinct concept). Return an empty entries array — notes already exist.
+
+${notesText}`
+        )
+        for (const card of flashcards) {
+          this.db.createFlashcard({
+            topic: card.topic.trim(),
+            frontMd: card.front_md.trim(),
+            backMd: card.back_md.trim(),
+            sessionId: session.id,
+            noteId: null
+          })
+        }
+        created += flashcards.length
+        this.db.setMeta(flag, new Date().toISOString())
+        if (flashcards.length > 0) {
+          console.log(`[notes] +${flashcards.length} backfilled card(s) for session ${session.id.slice(0, 8)}`)
+        }
+      } catch (err) {
+        console.error('[notes] card backfill failed for session', session.id, err)
+      }
+    }
+    if (created > 0) {
+      this.emit({
+        type: 'review-due',
+        sessionId: '',
+        dueCount: this.db.listDueFlashcards(new Date().toISOString()).length
+      })
+    }
+    return created
   }
 }
