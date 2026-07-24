@@ -830,12 +830,39 @@ button {
   gap: 12px;
 }
 
+/* Full screen: lift the whole pane — requirements, toolbar and editor — over the app
+   window. The toolbar comes along, so Run / Submit / Reset stay available while expanded.
+   z-index sits below .repl-output-scrim (100) so the run-output modal still layers on top;
+   the scrim is a descendant anyway, so it renders above this pane's own content either
+   way. Switching tabs display:none's the keepalive wrapper, which takes this with it. */
+.repl[data-fullscreen='true'] {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  padding: 16px;
+  background: var(--panel);
+}
+
+.repl-btn-fullscreen {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.repl-btn-fullscreen:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
 .repl-prompt {
   flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-raised);
   padding: 10px 14px;
+  /* Never let prompt content escape the rounded border, whatever the markdown
+     contains (wide <pre>, floated images, negative margins). */
+  overflow: hidden;
 }
 
 .repl-prompt[open] {
@@ -854,6 +881,59 @@ button {
 
 .repl-prompt .exercise-prompt {
   margin: 10px 0 0;
+}
+
+/* Dragged to an explicit height. The height lives on the text div (set inline), not on
+   the <details> — Chromium slots <details> children through its UA shadow DOM, so the
+   light-DOM children are not the <details>'s own layout children and a flex/overflow
+   arrangement across that boundary doesn't constrain them. Sizing the scroll container
+   itself sidesteps that entirely: the <details> stays auto-height, so the box always
+   matches its contents and nothing can paint over the toolbar below.
+   The summary sits outside this element, so the title stays visible at any size. */
+.repl-prompt[data-sized='true'] .exercise-prompt {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Divider between the requirements section and the editor. */
+.repl-splitter {
+  flex-shrink: 0;
+  height: 10px;
+  /* .repl's 12px gap already spaces these apart; pull the grip back so the divider
+     doesn't add a third band of empty space between the two sections. */
+  margin: -8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.repl-splitter::before {
+  content: '';
+  width: 56px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 120ms ease, width 120ms ease;
+}
+
+.repl-splitter:hover::before,
+.repl-splitter:focus-visible::before,
+.repl[data-resizing='true'] .repl-splitter::before {
+  background: var(--muted);
+  width: 88px;
+}
+
+.repl-splitter:focus-visible {
+  outline: none;
+}
+
+/* While dragging, stop the pointer from selecting prompt text or flickering the
+   cursor as it crosses the sections either side of the divider. */
+.repl[data-resizing='true'] {
+  user-select: none;
+  cursor: ns-resize;
 }
 
 .repl-toolbar {
@@ -946,6 +1026,18 @@ button {
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg);
+}
+
+/* @uiw/react-codemirror renders its own wrapper div (class "cm-theme-<theme>") between
+   .repl-editor and .cm-editor, and turns height="100%" into a rule on .cm-editor alone.
+   The wrapper had no height of its own, so that 100% resolved against an auto-height
+   parent and collapsed to auto: the editor grew to fit its content, .cm-scroller never
+   overflowed, and anything past the visible area was silently clipped by the
+   overflow:hidden above — no scrollbar, and nothing for the wheel to scroll. Giving the
+   wrapper a real height restores the chain. */
+.repl-editor > [class*='cm-theme'] {
+  height: 100%;
+  min-height: 0;
 }
 
 .repl-editor .cm-editor {

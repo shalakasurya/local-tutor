@@ -20,6 +20,30 @@ interface ConsoleLine {
   text: string
 }
 
+// How long to wait after a 'web' run for the iframe's load-time console messages to
+// arrive over postMessage. This is only the *initial* settle: the preview keeps logging
+// for as long as the student interacts with it, and those later lines are pushed to the
+// instructor by the refresh effect below rather than being lost.
+const WEB_CONSOLE_SETTLE_MS = 800
+
+// Floors for the drag-to-resize split between the requirements section and the editor.
+// Neither side can be dragged away entirely. The prompt floor applies to its scrolling
+// text area only — the title row sits outside that and is always visible.
+const MIN_PROMPT_BODY_HEIGHT = 40
+const MIN_EDITOR_HEIGHT = 120
+// Distance one arrow-key press moves the divider.
+const SPLITTER_KEY_STEP = 16
+
+function formatConsoleLines(lines: ConsoleLine[]): string {
+  if (lines.length === 0) {
+    // Deliberately "yet": an empty console usually means the student hasn't interacted
+    // with the preview, not that their code produced nothing. Phrasing it as a final
+    // verdict invites the instructor to diagnose a working program as broken.
+    return '(no console output yet — the student may not have interacted with the preview)'
+  }
+  return lines.map((line) => `${line.level}: ${line.text}`).join('\n')
+}
+
 function languageExtension(language: string): Extension[] {
   const lang = language.toLowerCase()
   switch (lang) {
@@ -60,6 +84,32 @@ export default function ReplPane({
   // run again first.
   const hasRunRef = useRef(false)
   const dirtyRef = useRef(true)
+  // The code that produced the currently-displayed result, and whether that result is a
+  // 'web' one. Console refreshes must report the code that actually ran, not whatever is
+  // in the editor now, and only web runs keep producing output after the initial report.
+  const ranCodeRef = useRef('')
+  const isWebRunRef = useRef(false)
+
+  // ---------- Resizable requirements/editor split ----------
+  // null = size to content (the original behaviour); a number pins the requirements
+  // *text area* to that pixel height and lets the editor take the rest. Deliberately not
+  // persisted: the split resets whenever the exercise changes.
+  //
+  // The height goes on the inner text div, never on the <details>. Chromium renders
+  // <details> through UA shadow-DOM slots, so the light-DOM children aren't its layout
+  // children — sizing the <details> and expecting an inner `flex: 1; overflow: auto` child
+  // to absorb it silently fails, and the text spills out over the toolbar and editor.
+  const [promptHeight, setPromptHeight] = useState<number | null>(null)
+  const [resizing, setResizing] = useState(false)
+  // Lifts the whole pane — requirements, toolbar and editor — over the app window.
+  // Resets on exercise change for free: StudyPanel keys this component by exercise.id.
+  const [fullscreen, setFullscreen] = useState(false)
+  const replRef = useRef<HTMLDivElement>(null)
+  const promptBodyRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<HTMLDivElement>(null)
+  // Set on pointer-down so the drag maths don't have to re-measure the fixed chrome
+  // (toolbar, divider, flex gaps) on every pointermove.
+  const dragRef = useRef<{ startY: number; startHeight: number; maxHeight: number } | null>(null)
 
   // Re-initialize editor content when the exercise changes. Deliberately keyed only on
   // exercise.id: onCodeSaved (below) writes autosaves back into the parent's exercise
@@ -74,6 +124,9 @@ export default function ReplPane({
     consoleLinesRef.current = []
     hasRunRef.current = false
     dirtyRef.current = true
+    ranCodeRef.current = ''
+    isWebRunRef.current = false
+    setPromptHeight(null)
     setPromptOpen(true)
     setOutputOpen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,6 +169,20 @@ export default function ReplPane({
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
   }, [outputOpen])
+
+  // Escape leaves full screen. Skipped while the output modal is open — that has its own
+  // Escape handler and should be the thing Escape closes first.
+  useEffect(() => {
+    if (!fullscreen) return
+    const handler = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || outputOpen) return
+      event.preventDefault()
+      event.stopPropagation()
+      setFullscreen(false)
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [fullscreen, outputOpen])
 
   // Remounting a 'web' result's iframe re-executes the code and replays its
   // console postMessages — clear captured lines whenever the modal opens on a
@@ -186,6 +253,22 @@ export default function ReplPane({
     }
   }, [exercise.id, onCodeSaved])
 
+  // Refreshes the instructor's copy of the last run's console output. reportRun overwrites
+  // the session's single latest-run slot (see main/ipc.ts), so this replaces the previous
+  // snapshot rather than adding an entry — safe to call repeatedly.
+  const pushConsoleReport = useCallback(async (): Promise<void> => {
+    try {
+      await window.tutor.reportRun({
+        sessionId,
+        exerciseId: exercise.id,
+        code: ranCodeRef.current,
+        output: formatConsoleLines(consoleLinesRef.current)
+      })
+    } catch {
+      // A failed refresh just leaves the previous snapshot in place.
+    }
+  }, [sessionId, exercise.id])
+
   // Runs the current code, displays the result, and reports it to the instructor.
   // Returns once the report has been sent.
   const runAndReport = useCallback(async (): Promise<void> => {
@@ -197,6 +280,8 @@ export default function ReplPane({
     try {
       const runResult = await window.tutor.runCode({ language: exercise.language, code })
       setResult(runResult)
+      ranCodeRef.current = code
+      isWebRunRef.current = runResult.kind === 'web'
 
       let output: string
       if (runResult.kind === 'node') {
@@ -207,12 +292,11 @@ export default function ReplPane({
       } else if (runResult.kind === 'error') {
         output = 'Build error: ' + runResult.message
       } else {
-        // 'web' — wait for the iframe's console messages to arrive via postMessage.
-        await new Promise((resolve) => setTimeout(resolve, 800))
-        output =
-          consoleLinesRef.current.length > 0
-            ? consoleLinesRef.current.map((line) => `${line.level}: ${line.text}`).join('\n')
-            : '(no console output)'
+        // 'web' — wait for the iframe's load-time console messages to arrive via
+        // postMessage. Anything logged later (clicks, typing, async work) is picked up by
+        // the refresh effect below, so this snapshot is a starting point, not the whole run.
+        await new Promise((resolve) => setTimeout(resolve, WEB_CONSOLE_SETTLE_MS))
+        output = formatConsoleLines(consoleLinesRef.current)
       }
 
       await window.tutor.reportRun({ sessionId, exerciseId: exercise.id, code, output })
@@ -224,6 +308,19 @@ export default function ReplPane({
     }
   }, [code, exercise.id, exercise.language, sessionId, onCodeSaved, onStudentActivity])
 
+  // Keep the instructor's view of a web run current. The preview iframe keeps posting
+  // console messages for as long as the student interacts with it, so the snapshot taken
+  // right after Run goes stale the moment they click anything. Without this, the
+  // instructor inspects a run and sees only the first WEB_CONSOLE_SETTLE_MS of output —
+  // which reads as "your code logged nothing" for any handler-driven log.
+  useEffect(() => {
+    if (!hasRunRef.current || !isWebRunRef.current || consoleLines.length === 0) return
+    const timer = setTimeout(() => {
+      void pushConsoleReport()
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [consoleLines, pushConsoleReport])
+
   const handleRun = useCallback(() => {
     void runAndReport()
   }, [runAndReport])
@@ -232,10 +329,19 @@ export default function ReplPane({
     void (async () => {
       if (!hasRunRef.current || dirtyRef.current) {
         await runAndReport()
+      } else if (isWebRunRef.current) {
+        // No re-run needed, but the student may have exercised the preview since the run.
+        // Flush the latest console before asking for review, so the instructor grades what
+        // actually happened rather than the state of the page at load.
+        await pushConsoleReport()
       }
       onStudentMessage("I've submitted my solution for the current exercise — please review it.")
     })()
-  }, [runAndReport, onStudentMessage])
+  }, [runAndReport, pushConsoleReport, onStudentMessage])
+
+  const handleToggleFullscreen = useCallback(() => {
+    setFullscreen((current) => !current)
+  }, [])
 
   const handleShowLastOutput = useCallback(() => {
     setOutputOpen(true)
@@ -251,18 +357,115 @@ export default function ReplPane({
     }
   }, [])
 
+  // ---------- Divider drag ----------
+  // How tall the requirements text can grow before the editor hits its floor. Everything
+  // else on screen (title row, toolbar, divider, gaps) is fixed, so whatever the text area
+  // takes it takes from the editor and nothing else — which reduces to the editor's
+  // current slack plus the text area's current height.
+  const maxPromptHeight = useCallback((): number => {
+    const bodyEl = promptBodyRef.current
+    const editorEl = editorRef.current
+    if (!bodyEl || !editorEl) return Number.POSITIVE_INFINITY
+    const bodyH = bodyEl.getBoundingClientRect().height
+    const editorH = editorEl.getBoundingClientRect().height
+    return Math.max(MIN_PROMPT_BODY_HEIGHT, bodyH + editorH - MIN_EDITOR_HEIGHT)
+  }, [])
+
+  const handleSplitterPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const bodyEl = promptBodyRef.current
+      if (!bodyEl) return
+      event.preventDefault()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      dragRef.current = {
+        startY: event.clientY,
+        startHeight: bodyEl.getBoundingClientRect().height,
+        maxHeight: maxPromptHeight()
+      }
+      setResizing(true)
+    },
+    [maxPromptHeight]
+  )
+
+  const handleSplitterPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const next = drag.startHeight + (event.clientY - drag.startY)
+    setPromptHeight(Math.min(Math.max(next, MIN_PROMPT_BODY_HEIGHT), drag.maxHeight))
+  }, [])
+
+  const handleSplitterPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    dragRef.current = null
+    setResizing(false)
+  }, [])
+
+  // Double-click the divider to go back to sizing the requirements to its content.
+  const handleSplitterDoubleClick = useCallback(() => {
+    setPromptHeight(null)
+  }, [])
+
+  const handleSplitterKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const bodyEl = promptBodyRef.current
+      if (!bodyEl) return
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+      event.preventDefault()
+      const delta = event.key === 'ArrowDown' ? SPLITTER_KEY_STEP : -SPLITTER_KEY_STEP
+      const current = promptHeight ?? bodyEl.getBoundingClientRect().height
+      setPromptHeight(
+        Math.min(Math.max(current + delta, MIN_PROMPT_BODY_HEIGHT), maxPromptHeight())
+      )
+    },
+    [promptHeight, maxPromptHeight]
+  )
+
+  // Only meaningful while the requirements section is expanded — there's nothing to
+  // resize against a collapsed <details>.
+  const sized = promptOpen && promptHeight !== null
+
   return (
-    <div className="repl">
+    <div
+      className="repl"
+      ref={replRef}
+      data-resizing={resizing ? 'true' : undefined}
+      data-fullscreen={fullscreen ? 'true' : undefined}
+    >
       <details
         className="repl-prompt"
+        data-sized={sized ? 'true' : undefined}
         open={promptOpen}
         onToggle={(event) => setPromptOpen((event.target as HTMLDetailsElement).open)}
       >
         <summary className="repl-prompt-summary">{exercise.title}</summary>
-        <div className="exercise-prompt markdown-body">
+        <div
+          className="exercise-prompt markdown-body"
+          ref={promptBodyRef}
+          style={sized ? { height: promptHeight ?? undefined } : undefined}
+        >
           <ReactMarkdown>{exercise.promptMd}</ReactMarkdown>
         </div>
       </details>
+
+      {promptOpen && (
+        <div
+          className="repl-splitter"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize the requirements section"
+          tabIndex={0}
+          onPointerDown={handleSplitterPointerDown}
+          onPointerMove={handleSplitterPointerMove}
+          onPointerUp={handleSplitterPointerUp}
+          onPointerCancel={handleSplitterPointerUp}
+          onDoubleClick={handleSplitterDoubleClick}
+          onKeyDown={handleSplitterKeyDown}
+          title="Drag to resize · double-click to fit the text"
+        />
+      )}
 
       <div className="repl-toolbar">
         <div className="repl-toolbar-left">
@@ -270,6 +473,15 @@ export default function ReplPane({
           <span className="repl-lang-badge">{exercise.language}</span>
         </div>
         <div className="repl-toolbar-right">
+          <button
+            type="button"
+            className="repl-btn repl-btn-fullscreen"
+            onClick={handleToggleFullscreen}
+            aria-pressed={fullscreen}
+            title={fullscreen ? 'Exit full screen (Esc)' : 'Expand the exercise to full screen'}
+          >
+            {fullscreen ? '⤡ Exit full screen' : '⤢ Full screen'}
+          </button>
           <button type="button" className="repl-btn repl-btn-reset" onClick={handleReset}>
             Reset
           </button>
@@ -296,7 +508,7 @@ export default function ReplPane({
         </div>
       </div>
 
-      <div className="repl-editor">
+      <div className="repl-editor" ref={editorRef}>
         <CodeMirror
           value={code}
           height="100%"
@@ -348,9 +560,17 @@ export default function ReplPane({
 
               {!running && result !== null && result.kind === 'web' && (
                 <div className="repl-output-web">
+                  {/*
+                    allow-forms: without it the form-submission algorithm bails before firing the
+                    submit event, so React's onSubmit never runs — silently, since the browser's
+                    own block message doesn't route through CONSOLE_CAPTURE_SCRIPT.
+                    allow-modals: re-enables alert/confirm/prompt in the student's code.
+                    Neither widens the sandbox meaningfully: without allow-same-origin the frame
+                    stays on an opaque origin, and allow-scripts already permits fetch().
+                  */}
                   <iframe
                     className="repl-iframe"
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-forms allow-modals"
                     srcDoc={result.html}
                     title="Exercise output"
                   />
