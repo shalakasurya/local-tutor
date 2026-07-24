@@ -255,6 +255,14 @@ export type TutorEvent =
   | { type: 'error'; sessionId: string; message: string }
   /** TTS started/stopped speaking. Global (not session-scoped) — handle before any session filtering. */
   | { type: 'speaking'; sessionId: string; active: boolean }
+  /**
+   * A synthesized TTS utterance to play through the renderer's WebAudio stack
+   * (so Chrome's echo canceller has the reference signal — enables voice barge-in).
+   * Global — handle before session filtering. Reply with ttsPlaybackEnded(utteranceId).
+   */
+  | { type: 'tts-audio'; sessionId: string; utteranceId: string; wav: ArrayBuffer }
+  /** Stop any in-renderer TTS playback immediately. Global — handle before session filtering. */
+  | { type: 'tts-stop'; sessionId: string }
   | { type: 'interview-started'; sessionId: string; interview: Interview }
   | { type: 'interview-completed'; sessionId: string; interview: Interview }
   /** A project was created (via tutor tool) or attached (via UI) and linked to the session. */
@@ -340,6 +348,8 @@ export interface TutorBridge {
   stopSpeaking(): Promise<void>
   /** Speak arbitrary text now (replay button). Works even when voice replies are off. */
   speakText(text: string): Promise<void>
+  /** Notify main that a tts-audio utterance finished (or failed) playing. */
+  ttsPlaybackEnded(utteranceId: string): Promise<void>
   /** Subscribe to tutor events. Returns an unsubscribe function. */
   onEvent(listener: (event: TutorEvent) => void): () => void
 }
@@ -377,6 +387,7 @@ export const IPC = {
   setVoiceReplies: 'voice:set-replies',
   stopSpeaking: 'voice:stop-speaking',
   speakText: 'voice:speak',
+  ttsEnded: 'voice:tts-ended',
   /** main -> renderer event channel; payload is a TutorEvent */
   event: 'tutor:event'
 } as const

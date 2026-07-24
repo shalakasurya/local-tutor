@@ -1,9 +1,16 @@
 import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
+import { randomUUID } from 'crypto'
+import { mkdtemp, readFile, rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import type { TutorEvent } from '../shared/types'
 
 // A sentence ends at ./!/?/… optionally followed by a closing quote/bracket, then whitespace.
 const SENTENCE_END = /[.!?…]["'”’)\]]*\s+/
+
+const SAMPLE_RATE = 22050
+const BYTES_PER_SAMPLE = 2
 
 function sanitize(text: string): string {
   return text
@@ -16,15 +23,31 @@ function hasContent(text: string): boolean {
   return /[a-z0-9]/i.test(text)
 }
 
+/**
+ * Text-to-speech via macOS `say` — but synthesized to WAV and PLAYED IN THE
+ * RENDERER (WebAudio), not by `say` itself. Routing playback through Chrome
+ * gives its acoustic echo canceller the reference signal, so the open mic can
+ * hear the student over the tutor's voice (voice barge-in) instead of having
+ * to suspend while the tutor speaks.
+ *
+ * Protocol: emit `tts-audio` {utteranceId, wav} → renderer plays → renderer
+ * calls ttsPlaybackEnded(utteranceId) → next utterance. A duration-based
+ * timeout advances the queue if the renderer never answers (closed window),
+ * and `tts-stop` halts renderer playback on stop()/barge-in.
+ */
 export class Speaker {
   private enabled = false
   private buffer = ''
   private queue: string[] = []
-  private current: ChildProcess | null = null
   private speaking = false
   private lastSessionId = ''
+  private busy = false
+  /** Bumped on stop(); in-flight synthesis results from an older generation are discarded. */
+  private generation = 0
+  private synthChild: ChildProcess | null = null
+  private awaiting: { id: string; timer: NodeJS.Timeout } | null = null
 
-  /** notify pushes speaking-state events to the renderer (never back into onTutorEvent). */
+  /** notify pushes speaking-state and audio events to the renderer (never back into onTutorEvent). */
   constructor(private notify: (event: TutorEvent) => void = () => {}) {}
 
   private setSpeaking(active: boolean): void {
@@ -99,65 +122,109 @@ export class Speaker {
   private enqueueSanitized(raw: string): void {
     const sentence = sanitize(raw)
     if (sentence && hasContent(sentence)) {
-      this.enqueue(sentence)
+      this.queue.push(sentence)
+      if (!this.busy) {
+        void this.pump()
+      }
     }
   }
 
-  private enqueue(sentence: string): void {
-    this.queue.push(sentence)
-    if (!this.current) {
-      this.pump()
-    }
+  /** Called (via IPC) when the renderer finished playing an utterance. */
+  playbackEnded(utteranceId: string): void {
+    if (this.awaiting?.id !== utteranceId) return
+    clearTimeout(this.awaiting.timer)
+    this.awaiting = null
+    void this.pump()
   }
 
-  private pump(): void {
+  private async pump(): Promise<void> {
     if (this.queue.length === 0) {
-      this.current = null
+      this.busy = false
       this.setSpeaking(false)
       return
     }
-    // Speak everything queued as ONE utterance. A per-sentence `say` process
-    // adds a mechanical gap between every sentence (audio device open/close)
-    // and loses inter-sentence prosody; batching means a new process is only
-    // needed when speech has fully caught up with generation.
-    //
-    // Within the utterance, `say` pauses ~0.66s after every period (measured)
-    // vs ~0.22s for a semicolon — so mid-passage periods become semicolons for
-    // a natural conversational flow. The final sentence keeps its period for
-    // proper end-of-passage cadence, and ?/! are preserved everywhere since
-    // their intonation carries meaning.
+    this.busy = true
+    const gen = this.generation
+
+    // Speak everything queued as ONE utterance for natural flow. `say` pauses
+    // ~0.66s after periods (measured) vs ~0.22s for semicolons, so mid-passage
+    // periods become semicolons; the final sentence keeps its cadence.
     const parts = this.queue.splice(0)
-    const next = parts
+    const text = parts
       .map((sentence, i) => (i < parts.length - 1 ? sentence.replace(/\.$/, ';') : sentence))
       .join(' ')
+
+    let wav: Buffer
+    try {
+      wav = await this.synthesize(text)
+    } catch {
+      if (gen === this.generation) void this.pump() // skip the failed utterance
+      return
+    }
+    if (gen !== this.generation) return // stopped while synthesizing
+
     this.setSpeaking(true)
+    const utteranceId = randomUUID()
+    const wavBuffer = wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength)
+    this.notify({
+      type: 'tts-audio',
+      sessionId: this.lastSessionId,
+      utteranceId,
+      wav: wavBuffer as ArrayBuffer
+    })
 
-    const args: string[] = []
-    if (process.env['SAY_VOICE']) {
-      args.push('-v', process.env['SAY_VOICE'])
+    // Fallback: if the renderer never reports back (window closed mid-speech),
+    // advance after the utterance's estimated duration plus grace.
+    const estimatedMs = (wav.length / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000 + 3000
+    this.awaiting = {
+      id: utteranceId,
+      timer: setTimeout(() => {
+        if (this.awaiting?.id === utteranceId) {
+          this.awaiting = null
+          void this.pump()
+        }
+      }, estimatedMs)
     }
-    args.push('-r', process.env['SAY_RATE'] ?? '190')
-    args.push('--', next)
+  }
 
-    const child = spawn('/usr/bin/say', args)
-    this.current = child
-
-    const advance = (): void => {
-      if (this.current === child) {
-        this.current = null
-        this.pump()
-      }
+  private async synthesize(text: string): Promise<Buffer> {
+    const dir = await mkdtemp(join(tmpdir(), 'tutor-tts-'))
+    const file = join(dir, 'utterance.wav')
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const args: string[] = ['-o', file, `--data-format=LEI16@${SAMPLE_RATE}`]
+        if (process.env['SAY_VOICE']) {
+          args.push('-v', process.env['SAY_VOICE'])
+        }
+        args.push('-r', process.env['SAY_RATE'] ?? '190')
+        args.push('--', text)
+        const child = spawn('/usr/bin/say', args)
+        this.synthChild = child
+        child.on('error', reject)
+        child.on('exit', (code) => {
+          if (this.synthChild === child) this.synthChild = null
+          code === 0 ? resolve() : reject(new Error(`say exited with ${code}`))
+        })
+      })
+      return await readFile(file)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
     }
-    child.on('error', advance)
-    child.on('exit', advance)
   }
 
   stop(): void {
+    this.generation++
     this.queue = []
-    if (this.current) {
-      this.current.kill('SIGTERM')
+    if (this.synthChild) {
+      this.synthChild.kill('SIGTERM')
+      this.synthChild = null
     }
-    this.current = null
+    if (this.awaiting) {
+      clearTimeout(this.awaiting.timer)
+      this.awaiting = null
+    }
+    this.busy = false
+    this.notify({ type: 'tts-stop', sessionId: this.lastSessionId })
     this.setSpeaking(false)
   }
 }

@@ -145,4 +145,8 @@ export function registerIpc(
   ipcMain.handle(IPC.stopSpeaking, () => speaker.stop())
 
   ipcMain.handle(IPC.speakText, (_event, text: string) => speaker.speakNow(String(text)))
+
+  ipcMain.handle(IPC.ttsEnded, (_event, utteranceId: string) =>
+    speaker.playbackEnded(String(utteranceId))
+  )
 }

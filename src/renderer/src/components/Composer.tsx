@@ -207,17 +207,24 @@ export default function Composer({
   )
 
   const handleOpenMicState = useCallback((state: OpenMicState) => {
+    // Barge-in: if the student starts talking while the tutor is speaking, the
+    // tutor yields immediately — the in-progress speech segment continues and
+    // becomes the student's message once transcribed.
+    if (state === 'speech' && ttsSpeakingRef.current) {
+      onStopSpeakingRef.current()
+    }
     setOpenMicState(state)
   }, [])
 
-  // Manual mute must survive TTS speaking transitions, so track it explicitly:
-  // the mic is suspended when EITHER the user muted it or the tutor is speaking.
+  // Manual mute is now the only thing suspend() reflects — TTS playback periods
+  // are handled by ducking (raised VAD threshold) instead, so the mic stays
+  // genuinely live and can hear a barge-in while the tutor speaks.
   const mutedRef = useRef(false)
   const toggleOpenMicMute = useCallback(() => {
     const mic = openMicRef.current
     if (!mic || !mic.running) return
     mutedRef.current = !mutedRef.current
-    mic.suspend(mutedRef.current || ttsSpeakingRef.current)
+    mic.suspend(mutedRef.current)
   }, [])
   const toggleOpenMicMuteRef = useRef(toggleOpenMicMute)
   toggleOpenMicMuteRef.current = toggleOpenMicMute
@@ -241,9 +248,11 @@ export default function Composer({
           getOpenMic().stop()
           return
         }
-        // Sync initial suspend state in case TTS is already speaking.
+        // suspend() now reflects manual mute only; TTS playback periods are
+        // handled by ducking instead, synced here in case TTS is already speaking.
         mutedRef.current = false
-        getOpenMic().suspend(ttsSpeakingRef.current)
+        getOpenMic().suspend(false)
+        getOpenMic().setDucking(ttsSpeakingRef.current)
       } catch (err) {
         if (!cancelled) {
           setVoiceError(err instanceof Error ? err.message : 'Could not start hands-free mode')
@@ -263,10 +272,12 @@ export default function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [micMode, voice, ensureMicAccess, handleOpenMicSegment, handleOpenMicState])
 
-  // Suspend/resume hands-free capture while the tutor's TTS is speaking, so we
-  // don't transcribe its own voice. A user-initiated mute always keeps it suspended.
+  // Duck (rather than suspend) hands-free capture while the tutor's TTS is
+  // speaking: the echo canceller keeps the mic usable, and a raised VAD
+  // threshold guards against residual echo, while still allowing a genuine
+  // barge-in to be heard and interrupt the tutor.
   useEffect(() => {
-    openMicRef.current?.suspend(mutedRef.current || ttsSpeaking)
+    openMicRef.current?.setDucking(ttsSpeaking)
   }, [ttsSpeaking])
 
   // Full teardown on unmount.
@@ -366,7 +377,7 @@ export default function Composer({
   } else if (micMode === 'open') {
     micTitle =
       openMicState === 'suspended'
-        ? 'Paused while the tutor speaks'
+        ? 'Muted (⌥Space to unmute)'
         : 'Hands-free on — click to switch to manual'
   } else {
     micTitle = 'Voice input (⌥Space: tap to toggle, hold to talk)'
@@ -379,7 +390,7 @@ export default function Composer({
     } else if (openMicState === 'speech') {
       placeholder = 'Listening…'
     } else if (openMicState === 'suspended') {
-      placeholder = 'Hands-free paused while the tutor speaks'
+      placeholder = 'Hands-free muted — ⌥Space to unmute'
     } else {
       placeholder = 'Hands-free — just start talking'
     }

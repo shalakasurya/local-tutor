@@ -19,6 +19,13 @@ const MIN_SPEECH_THRESHOLD = 0.012
 const SILENCE_HANGOVER_MS = 1200
 const MIN_VOICED_MS = 400
 const MAX_SEGMENT_MS = 90_000
+// While the tutor's TTS is playing (ducking), the echo canceller usually removes
+// its voice from the mic signal, but residual echo can still cross the base
+// threshold. Raise the bar and require several consecutive above-threshold
+// frames before committing to a speech segment, so residual echo doesn't
+// falsely trigger a barge-in.
+const DUCKING_THRESHOLD_MULTIPLIER = 2.5
+const DUCKING_CONSECUTIVE_FRAMES = 4 // ~256ms at ~64ms/frame
 
 export class OpenMic {
   private stream: MediaStream | null = null
@@ -31,6 +38,8 @@ export class OpenMic {
   private isRunning = false
   private isSuspended = false
   private isSpeaking = false
+  private isDucking = false
+  private consecutiveVoicedFrames = 0
 
   private noiseFloor = NOISE_FLOOR_INITIAL
   private preRoll: Float32Array[] = []
@@ -73,6 +82,8 @@ export class OpenMic {
     this.silenceMs = 0
     this.isSpeaking = false
     this.isSuspended = false
+    this.isDucking = false
+    this.consecutiveVoicedFrames = 0
 
     processor.onaudioprocess = (event: AudioProcessingEvent): void => {
       const input = event.inputBuffer.getChannelData(0)
@@ -94,6 +105,19 @@ export class OpenMic {
     callbacks.onState('listening')
   }
 
+  /**
+   * Toggle ducking for TTS playback periods: raises the speech threshold and
+   * requires several consecutive voiced frames before entering 'speech', so
+   * echo the AEC didn't fully cancel doesn't falsely trigger a segment. Does
+   * not affect an already-in-progress speech segment, noise-floor adaptation,
+   * or suspend().
+   */
+  setDucking(on: boolean): void {
+    if (this.isDucking === on) return
+    this.isDucking = on
+    this.consecutiveVoicedFrames = 0
+  }
+
   suspend(on: boolean): void {
     if (!this.isRunning || this.isSuspended === on) return
     this.isSuspended = on
@@ -112,6 +136,8 @@ export class OpenMic {
     this.isRunning = false
     this.isSuspended = false
     this.isSpeaking = false
+    this.isDucking = false
+    this.consecutiveVoicedFrames = 0
     this.preRoll = []
     this.segmentFrames = []
     this.silenceMs = 0
@@ -143,17 +169,28 @@ export class OpenMic {
 
     const rms = computeRms(frame)
     const frameMs = (frame.length / this.sampleRate) * 1000
-    const threshold = Math.max(MIN_SPEECH_THRESHOLD, this.noiseFloor * 3)
+    let threshold = Math.max(MIN_SPEECH_THRESHOLD, this.noiseFloor * 3)
+    if (this.isDucking) {
+      threshold *= DUCKING_THRESHOLD_MULTIPLIER
+    }
     const aboveThreshold = rms > threshold
 
     if (!this.isSpeaking) {
       if (aboveThreshold) {
+        if (this.isDucking) {
+          this.consecutiveVoicedFrames++
+          if (this.consecutiveVoicedFrames < DUCKING_CONSECUTIVE_FRAMES) {
+            return
+          }
+        }
+        this.consecutiveVoicedFrames = 0
         this.isSpeaking = true
         this.segmentFrames = [...this.preRoll, frame]
         this.preRoll = []
         this.silenceMs = 0
         this.callbacks.onState('speech')
       } else {
+        this.consecutiveVoicedFrames = 0
         this.noiseFloor = this.noiseFloor * (1 - NOISE_FLOOR_ALPHA) + rms * NOISE_FLOOR_ALPHA
         this.preRoll.push(frame)
         if (this.preRoll.length > PRE_ROLL_FRAMES) {

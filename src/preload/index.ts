@@ -35,6 +35,7 @@ const bridge: TutorBridge = {
   setVoiceReplies: (enabled) => ipcRenderer.invoke(IPC.setVoiceReplies, enabled),
   stopSpeaking: () => ipcRenderer.invoke(IPC.stopSpeaking),
   speakText: (text) => ipcRenderer.invoke(IPC.speakText, text),
+  ttsPlaybackEnded: (utteranceId) => ipcRenderer.invoke(IPC.ttsEnded, utteranceId),
   onEvent: (listener) => {
     const handler = (_e: IpcRendererEvent, event: TutorEvent): void => listener(event)
     ipcRenderer.on(IPC.event, handler)

@@ -13,6 +13,7 @@ import TranscriptPane from './components/TranscriptPane'
 import Composer from './components/Composer'
 import StudyPanel, { type StudyTab, type WhiteboardState } from './components/StudyPanel'
 import ScaffoldModal from './components/ScaffoldModal'
+import { TtsPlayer } from './lib/ttsPlayer'
 
 /** Payload for a pending scaffold-request approval modal. */
 interface ScaffoldRequestState {
@@ -72,6 +73,11 @@ export default function App(): JSX.Element {
   const sessionProjectRef = useRef<{ project: Project; changes: ChangedFile[] } | null>(null)
   // Locally-appended turns get negative ids so they never collide with DB row ids.
   const localIdRef = useRef(-1)
+  // Lazily-created WebAudio player for main-synthesized TTS utterances (see 'tts-audio' below).
+  const ttsPlayerRef = useRef<TtsPlayer | null>(null)
+  if (ttsPlayerRef.current === null) {
+    ttsPlayerRef.current = new TtsPlayer()
+  }
 
   // Interview idle-nudge scheduler bookkeeping. lastActivityRef is the timestamp of the
   // most recent student activity (or of a baseline reset — see below); nudgeCountRef caps
@@ -185,6 +191,23 @@ export default function App(): JSX.Element {
       // the session-id filter below, which only applies to session-scoped events.
       if (event.type === 'speaking') {
         setTtsSpeaking(event.active)
+        return
+      }
+
+      // 'tts-audio' / 'tts-stop' are global (renderer-side WebAudio playback of
+      // main-synthesized TTS, so Chrome's echo canceller can see the reference
+      // signal) — handle before the session filter, same as 'speaking'.
+      if (event.type === 'tts-audio') {
+        const player = ttsPlayerRef.current
+        if (player) {
+          void player.play(event.utteranceId, event.wav, (id) =>
+            void window.tutor.ttsPlaybackEnded(id).catch(() => {})
+          )
+        }
+        return
+      }
+      if (event.type === 'tts-stop') {
+        ttsPlayerRef.current?.stop()
         return
       }
 
