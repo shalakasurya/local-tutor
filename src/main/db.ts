@@ -47,6 +47,7 @@ interface ExerciseRow {
   starter_code: string
   solution_code: string | null
   status: Exercise['status']
+  tests: string
   created_at: string
 }
 
@@ -148,6 +149,7 @@ function toExercise(row: ExerciseRow): Exercise {
     starterCode: row.starter_code,
     solutionCode: row.solution_code,
     status: row.status,
+    tests: JSON.parse(row.tests || '[]') as Exercise['tests'],
     createdAt: row.created_at
   }
 }
@@ -204,6 +206,7 @@ export function createDb(dbPath: string): DbApi {
       starter_code TEXT NOT NULL,
       solution_code TEXT,
       status TEXT NOT NULL,
+      tests TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS whiteboards (
@@ -246,6 +249,12 @@ export function createDb(dbPath: string): DbApi {
     );
   `)
 
+  // Migration: exercises.tests was added after the table shipped.
+  const exerciseCols = db.pragma('table_info(exercises)') as Array<{ name: string }>
+  if (!exerciseCols.some((c) => c.name === 'tests')) {
+    db.exec("ALTER TABLE exercises ADD COLUMN tests TEXT NOT NULL DEFAULT '[]'")
+  }
+
   const insertSession = db.prepare(
     'INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)'
   )
@@ -271,8 +280,8 @@ export function createDb(dbPath: string): DbApi {
   const selectLessons = db.prepare('SELECT * FROM lessons ORDER BY created_at DESC')
 
   const insertExercise = db.prepare(`
-    INSERT INTO exercises (id, lesson_id, session_id, title, prompt_md, language, starter_code, solution_code, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO exercises (id, lesson_id, session_id, title, prompt_md, language, starter_code, solution_code, status, tests, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const selectExercises = db.prepare('SELECT * FROM exercises ORDER BY created_at DESC')
   const selectExercise = db.prepare('SELECT * FROM exercises WHERE id = ?')
@@ -439,6 +448,7 @@ export function createDb(dbPath: string): DbApi {
         starterCode: input.starterCode,
         solutionCode: null,
         status: 'assigned',
+        tests: input.tests,
         createdAt: new Date().toISOString()
       }
       insertExercise.run(
@@ -451,6 +461,7 @@ export function createDb(dbPath: string): DbApi {
         exercise.starterCode,
         exercise.solutionCode,
         exercise.status,
+        JSON.stringify(exercise.tests),
         exercise.createdAt
       )
       return exercise

@@ -4,10 +4,13 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { app } from 'electron'
 import { build, transform } from 'esbuild'
-import type { RunResult } from '../shared/types'
+import type { ExerciseTest, RunResult, TestRunResult } from '../shared/types'
 
 const MAX_OUTPUT_CHARS = 20000
 const TIMEOUT_MS = 5000
+const TESTS_TIMEOUT_MS = 15000
+const PER_TEST_TIMEOUT_MS = 2000
+const TEST_LINE = '__TUTOR_TEST__'
 
 function truncate(text: string): string {
   if (text.length <= MAX_OUTPUT_CHARS) return text
@@ -57,19 +60,19 @@ const CSS_SAMPLE_MARKUP = `<div class="container">
   </ul>
 </div>`
 
-async function runNode(code: string): Promise<RunResult> {
+interface SpawnResult {
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  timedOut: boolean
+}
+
+async function spawnNode(code: string, timeoutMs: number): Promise<SpawnResult> {
   const dir = await mkdtemp(join(tmpdir(), 'tutor-run-'))
   const file = join(dir, 'main.mjs')
-  const start = Date.now()
   try {
     await writeFile(file, code, 'utf8')
-
-    const { stdout, stderr, exitCode, timedOut } = await new Promise<{
-      stdout: string
-      stderr: string
-      exitCode: number | null
-      timedOut: boolean
-    }>((resolve) => {
+    return await new Promise<SpawnResult>((resolve) => {
       const child = spawn(process.execPath, [file], {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
       })
@@ -81,7 +84,7 @@ async function runNode(code: string): Promise<RunResult> {
       const timer = setTimeout(() => {
         timedOut = true
         child.kill('SIGKILL')
-      }, TIMEOUT_MS)
+      }, timeoutMs)
 
       child.stdout.on('data', (chunk) => {
         stdout += chunk.toString()
@@ -100,17 +103,149 @@ async function runNode(code: string): Promise<RunResult> {
         resolve({ stdout, stderr, exitCode: null, timedOut })
       })
     })
-
-    return {
-      kind: 'node',
-      stdout: truncate(stdout),
-      stderr: truncate(stderr),
-      exitCode,
-      timedOut,
-      durationMs: Date.now() - start
-    }
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+}
+
+async function runNode(code: string): Promise<RunResult> {
+  const start = Date.now()
+  const { stdout, stderr, exitCode, timedOut } = await spawnNode(code, TIMEOUT_MS)
+  return {
+    kind: 'node',
+    stdout: truncate(stdout),
+    stderr: truncate(stderr),
+    exitCode,
+    timedOut,
+    durationMs: Date.now() - start
+  }
+}
+
+/**
+ * Appends a test harness after the student's code (same module scope, so
+ * assertions can call the student's functions directly). Each case reports a
+ * result line as it completes, so a sync infinite loop in one case still
+ * preserves the results of the cases that ran before the process is killed.
+ */
+function buildTestHarness(studentCode: string, tests: ExerciseTest[]): string {
+  const cases = tests
+    .map(
+      (t) =>
+        `  { description: ${JSON.stringify(t.description)}, fn: async () => {\n${t.assertion}\n  } },`
+    )
+    .join('\n')
+  return `${studentCode}
+
+// ---- tutor test harness (appended after student code) ----
+function assert(condition, message) {
+  if (!condition) throw new Error(message ?? 'assertion failed')
+}
+function assertEqual(actual, expected, message) {
+  const a = JSON.stringify(actual)
+  const e = JSON.stringify(expected)
+  if (a !== e) throw new Error((message ? message + ' — ' : '') + 'expected ' + e + ', got ' + a)
+}
+const __tutorTests = [
+${cases}
+]
+;(async () => {
+  for (const t of __tutorTests) {
+    let line
+    try {
+      await Promise.race([
+        t.fn(),
+        new Promise((_r, reject) =>
+          setTimeout(() => reject(new Error('test timed out after ${PER_TEST_TIMEOUT_MS}ms')), ${PER_TEST_TIMEOUT_MS})
+        )
+      ])
+      line = { description: t.description, passed: true }
+    } catch (err) {
+      line = {
+        description: t.description,
+        passed: false,
+        message: err instanceof Error ? err.message : String(err)
+      }
+    }
+    console.log(${JSON.stringify(TEST_LINE)} + JSON.stringify(line))
+  }
+})()
+`
+}
+
+export async function runTests(input: {
+  language: string
+  code: string
+  tests: ExerciseTest[]
+}): Promise<TestRunResult> {
+  const language = input.language.toLowerCase()
+  if (language !== 'javascript' && language !== 'typescript') {
+    return {
+      kind: 'tests',
+      results: [],
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      buildError: `Tests are only supported for javascript/typescript exercises (got ${input.language}).`
+    }
+  }
+
+  let studentCode = input.code
+  if (language === 'typescript') {
+    try {
+      studentCode = (await transform(input.code, { loader: 'ts', format: 'esm' })).code
+    } catch (err) {
+      return {
+        kind: 'tests',
+        results: [],
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+        buildError: formatBuildError(err)
+      }
+    }
+  }
+
+  const harness = buildTestHarness(studentCode, input.tests)
+  const { stdout, stderr, timedOut } = await spawnNode(harness, TESTS_TIMEOUT_MS)
+
+  const results: TestRunResult['results'] = []
+  const studentLines: string[] = []
+  for (const line of stdout.split('\n')) {
+    if (line.startsWith(TEST_LINE)) {
+      try {
+        results.push(JSON.parse(line.slice(TEST_LINE.length)) as TestRunResult['results'][number])
+      } catch {
+        studentLines.push(line)
+      }
+    } else if (line.length > 0) {
+      studentLines.push(line)
+    }
+  }
+
+  // Cases the harness never reported: the first one hung (or the run died in it);
+  // anything after it simply never got a chance.
+  if (results.length < input.tests.length) {
+    const firstMissing = results.length
+    for (let i = firstMissing; i < input.tests.length; i++) {
+      results.push({
+        description: input.tests[i].description,
+        passed: false,
+        message:
+          i === firstMissing
+            ? timedOut
+              ? 'timed out — possible infinite loop'
+              : 'did not run (the program crashed before this test)'
+            : 'did not run'
+      })
+    }
+  }
+
+  return {
+    kind: 'tests',
+    results,
+    stdout: truncate(studentLines.join('\n')),
+    stderr: truncate(stderr),
+    timedOut
   }
 }
 

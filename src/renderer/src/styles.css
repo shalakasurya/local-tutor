@@ -895,6 +895,42 @@ button {
   overscroll-behavior: contain;
 }
 
+/* "What's tested" — compact collapsible list of test descriptions (never the assertion
+   code). Default collapsed, sits between the requirements section and the toolbar. */
+.repl-tests-panel {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-raised);
+  padding: 8px 14px;
+}
+
+.repl-tests-panel[open] {
+  padding-bottom: 10px;
+}
+
+.repl-tests-panel-summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  list-style: none;
+  color: var(--muted);
+}
+
+.repl-tests-panel-summary::-webkit-details-marker {
+  color: var(--muted);
+}
+
+.repl-tests-panel-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: var(--text);
+}
+
+.repl-tests-panel-list li {
+  margin: 4px 0;
+}
+
 /* Divider between the requirements section and the editor. */
 .repl-splitter {
   flex-shrink: 0;
@@ -1017,6 +1053,24 @@ button {
 
 .repl-btn-submit:hover {
   background: rgba(127, 179, 245, 0.12);
+}
+
+/* Secondary-outline, distinct from the filled-green ▶ Run button but themed with the
+   same accent so it still reads as "part of running the exercise". */
+.repl-btn-run-tests {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.repl-btn-run-tests:hover:not(:disabled) {
+  background: rgba(74, 124, 68, 0.12);
+}
+
+.repl-btn-run-tests:disabled {
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: default;
 }
 
 .repl-editor {
@@ -1222,6 +1276,92 @@ button {
 
 .repl-console-error {
   color: #e5534b;
+}
+
+/* ---------- Test-run results (inside the output modal) ---------- */
+
+.repl-output-tests {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.repl-tests-summary-line {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.repl-tests-summary-line-pass {
+  color: #4a7c44;
+}
+
+.repl-tests-summary-line-fail {
+  color: #e5534b;
+}
+
+.repl-tests-celebrate {
+  font-weight: 400;
+}
+
+.repl-tests-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.repl-test-case {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--panel-raised);
+}
+
+.repl-test-case-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.repl-test-case-icon {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.repl-test-case-pass .repl-test-case-icon {
+  color: #4a7c44;
+}
+
+.repl-test-case-fail .repl-test-case-icon {
+  color: #e5534b;
+}
+
+.repl-test-case-desc {
+  color: var(--text);
+}
+
+.repl-test-case-message {
+  margin: 4px 0 0 22px;
+  color: rgba(229, 83, 75, 0.8);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.repl-output-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.repl-output-section-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 /* Transcript bubbles are clickable: they navigate the whiteboard to that moment. */

@@ -5,7 +5,7 @@ import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
 import type { Extension } from '@uiw/react-codemirror'
 import ReactMarkdown from 'react-markdown'
-import type { Exercise, RunResult } from '../../../shared/types'
+import type { Exercise, RunResult, TestRunResult } from '../../../shared/types'
 
 interface ReplPaneProps {
   sessionId: string
@@ -44,6 +44,28 @@ function formatConsoleLines(lines: ConsoleLine[]): string {
   return lines.map((line) => `${line.level}: ${line.text}`).join('\n')
 }
 
+/** Which flavor of output the run-output modal is currently displaying — set by whichever
+ *  action (plain run or test run) most recently opened it, so "Last output" reopens the
+ *  right one without needing to track anything beyond "the last thing that ran". */
+type ModalContent = 'run' | 'tests'
+
+/** Formats a completed test run for the instructor's transcript: pass/fail summary,
+ *  one line per case, then any captured console/stderr/build-error output. Mirrors the
+ *  plain-run output formatting in runAndReport below. */
+function formatTestReport(testRunResult: TestRunResult): string {
+  const passedCount = testRunResult.results.filter((r) => r.passed).length
+  const total = testRunResult.results.length
+  const lines = testRunResult.results.map((r) =>
+    r.passed ? `✓ ${r.description}` : `✗ ${r.description}${r.message ? ' — ' + r.message : ''}`
+  )
+  let output = `Test results: ${passedCount}/${total} passed`
+  if (lines.length > 0) output += '\n' + lines.join('\n')
+  if (testRunResult.stdout !== '') output += '\n[console]\n' + testRunResult.stdout
+  if (testRunResult.stderr !== '') output += '\n[stderr]\n' + testRunResult.stderr
+  if (testRunResult.buildError) output += '\n[build error] ' + testRunResult.buildError
+  return output
+}
+
 function languageExtension(language: string): Extension[] {
   const lang = language.toLowerCase()
   switch (lang) {
@@ -72,10 +94,19 @@ export default function ReplPane({
 }: ReplPaneProps): JSX.Element {
   const [code, setCode] = useState(exercise.solutionCode ?? exercise.starterCode)
   const [promptOpen, setPromptOpen] = useState(true)
+  const [testsOpen, setTestsOpen] = useState(false)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<RunResult | null>(null)
+  const [testResult, setTestResult] = useState<TestRunResult | null>(null)
+  const [modalContent, setModalContent] = useState<ModalContent>('run')
   const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([])
   const [outputOpen, setOutputOpen] = useState(false)
+
+  // Test cases are only runnable/inspectable for JS/TS exercises (the sandboxed harness
+  // that appends assertions after the student's code only supports those two languages).
+  const hasTests =
+    exercise.tests.length > 0 &&
+    (exercise.language === 'javascript' || exercise.language === 'typescript')
 
   // Accumulator ref so the delayed 'web' report reads freshly-captured console lines.
   const consoleLinesRef = useRef<ConsoleLine[]>([])
@@ -120,6 +151,8 @@ export default function ReplPane({
   useEffect(() => {
     setCode(exercise.solutionCode ?? exercise.starterCode)
     setResult(null)
+    setTestResult(null)
+    setModalContent('run')
     setConsoleLines([])
     consoleLinesRef.current = []
     hasRunRef.current = false
@@ -128,6 +161,7 @@ export default function ReplPane({
     isWebRunRef.current = false
     setPromptHeight(null)
     setPromptOpen(true)
+    setTestsOpen(false)
     setOutputOpen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exercise.id])
@@ -276,6 +310,7 @@ export default function ReplPane({
     consoleLinesRef.current = []
     setConsoleLines([])
     setRunning(true)
+    setModalContent('run')
     setOutputOpen(true)
     try {
       const runResult = await window.tutor.runCode({ language: exercise.language, code })
@@ -308,6 +343,38 @@ export default function ReplPane({
     }
   }, [code, exercise.id, exercise.language, sessionId, onCodeSaved, onStudentActivity])
 
+  // Runs the exercise's test cases, displays the checklist, and reports a formatted
+  // summary to the instructor. Mirrors runAndReport above but never produces a 'web'
+  // result, so there's no console-settle wait or ongoing refresh to worry about.
+  const runTestsAndReport = useCallback(async (): Promise<void> => {
+    onStudentActivity()
+    setRunning(true)
+    setModalContent('tests')
+    setOutputOpen(true)
+    try {
+      const testRunResult = await window.tutor.runTests({
+        language: exercise.language,
+        code,
+        tests: exercise.tests
+      })
+      setTestResult(testRunResult)
+      ranCodeRef.current = code
+      isWebRunRef.current = false
+
+      await window.tutor.reportRun({
+        sessionId,
+        exerciseId: exercise.id,
+        code,
+        output: formatTestReport(testRunResult)
+      })
+      hasRunRef.current = true
+      dirtyRef.current = false
+      onCodeSaved(exercise.id, code)
+    } finally {
+      setRunning(false)
+    }
+  }, [code, exercise.id, exercise.language, exercise.tests, sessionId, onCodeSaved, onStudentActivity])
+
   // Keep the instructor's view of a web run current. The preview iframe keeps posting
   // console messages for as long as the student interacts with it, so the snapshot taken
   // right after Run goes stale the moment they click anything. Without this, the
@@ -325,10 +392,15 @@ export default function ReplPane({
     void runAndReport()
   }, [runAndReport])
 
+  const handleRunTests = useCallback(() => {
+    void runTestsAndReport()
+  }, [runTestsAndReport])
+
   const handleSubmit = useCallback(() => {
     void (async () => {
       if (!hasRunRef.current || dirtyRef.current) {
-        await runAndReport()
+        // Exercises with tests submit objective results; everything else keeps the plain run.
+        await (hasTests ? runTestsAndReport() : runAndReport())
       } else if (isWebRunRef.current) {
         // No re-run needed, but the student may have exercised the preview since the run.
         // Flush the latest console before asking for review, so the instructor grades what
@@ -337,7 +409,7 @@ export default function ReplPane({
       }
       onStudentMessage("I've submitted my solution for the current exercise — please review it.")
     })()
-  }, [runAndReport, pushConsoleReport, onStudentMessage])
+  }, [hasTests, runAndReport, runTestsAndReport, pushConsoleReport, onStudentMessage])
 
   const handleToggleFullscreen = useCallback(() => {
     setFullscreen((current) => !current)
@@ -467,6 +539,21 @@ export default function ReplPane({
         />
       )}
 
+      {hasTests && (
+        <details
+          className="repl-tests-panel"
+          open={testsOpen}
+          onToggle={(event) => setTestsOpen((event.target as HTMLDetailsElement).open)}
+        >
+          <summary className="repl-tests-panel-summary">Tests ({exercise.tests.length})</summary>
+          <ul className="repl-tests-panel-list">
+            {exercise.tests.map((test, index) => (
+              <li key={index}>{test.description}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       <div className="repl-toolbar">
         <div className="repl-toolbar-left">
           <span className="repl-title">{exercise.title}</span>
@@ -485,7 +572,7 @@ export default function ReplPane({
           <button type="button" className="repl-btn repl-btn-reset" onClick={handleReset}>
             Reset
           </button>
-          {result !== null && (
+          {(result !== null || testResult !== null) && (
             <button
               type="button"
               className="repl-btn repl-btn-last-output"
@@ -502,6 +589,16 @@ export default function ReplPane({
           >
             {running ? 'Running…' : '▶ Run'}
           </button>
+          {hasTests && (
+            <button
+              type="button"
+              className="repl-btn repl-btn-run-tests"
+              onClick={handleRunTests}
+              disabled={running}
+            >
+              {running ? 'Running…' : '✓ Run tests'}
+            </button>
+          )}
           <button type="button" className="repl-btn repl-btn-submit" onClick={handleSubmit}>
             Submit for review
           </button>
@@ -537,11 +634,82 @@ export default function ReplPane({
             <div className="repl-output-modal-body">
               {running && <div className="repl-output-status">Running…</div>}
 
-              {!running && result === null && (
+              {!running && modalContent === 'tests' && testResult === null && (
+                <div className="repl-output-empty">Run the tests to see results here.</div>
+              )}
+
+              {!running && modalContent === 'tests' && testResult !== null && (
+                <div className="repl-output-tests">
+                  {testResult.buildError ? (
+                    <pre className="repl-output-error">
+                      Build error: {testResult.buildError}
+                    </pre>
+                  ) : (
+                    <>
+                      {(() => {
+                        const passedCount = testResult.results.filter((r) => r.passed).length
+                        const total = testResult.results.length
+                        const allPassed = total > 0 && passedCount === total
+                        return (
+                          <div
+                            className={
+                              'repl-tests-summary-line ' +
+                              (allPassed
+                                ? 'repl-tests-summary-line-pass'
+                                : 'repl-tests-summary-line-fail')
+                            }
+                          >
+                            {passedCount} / {total} passed
+                            {allPassed && <span className="repl-tests-celebrate"> 🎉</span>}
+                          </div>
+                        )
+                      })()}
+                      <ul className="repl-tests-checklist">
+                        {testResult.results.map((testCase, index) => (
+                          <li
+                            key={index}
+                            className={
+                              'repl-test-case ' +
+                              (testCase.passed ? 'repl-test-case-pass' : 'repl-test-case-fail')
+                            }
+                          >
+                            <div className="repl-test-case-row">
+                              <span className="repl-test-case-icon">
+                                {testCase.passed ? '✓' : '✗'}
+                              </span>
+                              <span className="repl-test-case-desc">{testCase.description}</span>
+                            </div>
+                            {!testCase.passed && testCase.message && (
+                              <div className="repl-test-case-message">{testCase.message}</div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      {testResult.timedOut && (
+                        <div className="repl-output-timeout">⏱ Timed out</div>
+                      )}
+                      {testResult.stdout !== '' && (
+                        <div className="repl-output-section">
+                          <div className="repl-output-section-label">Console</div>
+                          <pre className="repl-stdout">{testResult.stdout}</pre>
+                        </div>
+                      )}
+                      {testResult.stderr !== '' && (
+                        <div className="repl-output-section">
+                          <div className="repl-output-section-label">stderr</div>
+                          <pre className="repl-stderr">{testResult.stderr}</pre>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {!running && modalContent === 'run' && result === null && (
                 <div className="repl-output-empty">Run your code to see output here.</div>
               )}
 
-              {!running && result !== null && result.kind === 'node' && (
+              {!running && modalContent === 'run' && result !== null && result.kind === 'node' && (
                 <div className="repl-output-node">
                   {result.timedOut && (
                     <div className="repl-output-timeout">⏱ Timed out after 5s</div>
@@ -554,11 +722,11 @@ export default function ReplPane({
                 </div>
               )}
 
-              {!running && result !== null && result.kind === 'error' && (
+              {!running && modalContent === 'run' && result !== null && result.kind === 'error' && (
                 <pre className="repl-output-error">Build error: {result.message}</pre>
               )}
 
-              {!running && result !== null && result.kind === 'web' && (
+              {!running && modalContent === 'run' && result !== null && result.kind === 'web' && (
                 <div className="repl-output-web">
                   {/*
                     allow-forms: without it the form-submission algorithm bails before firing the

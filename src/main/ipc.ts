@@ -1,9 +1,9 @@
 import { ipcMain, systemPreferences } from 'electron'
 import { IPC } from '../shared/types'
-import type { DbApi, LastRun, Project } from '../shared/types'
+import type { DbApi, ExerciseTest, LastRun, Project } from '../shared/types'
 import type { Instructor } from './instructor'
 import type { ProjectsService } from './projects'
-import { runCode } from './runner'
+import { runCode, runTests } from './runner'
 import { sttStatus, transcribe } from './stt'
 import type { Speaker } from './tts'
 
@@ -108,6 +108,11 @@ export function registerIpc(
   ipcMain.handle(IPC.runCode, (_event, input: { language: string; code: string }) => {
     return runCode(input)
   })
+
+  ipcMain.handle(
+    IPC.runTests,
+    (_event, input: { language: string; code: string; tests: ExerciseTest[] }) => runTests(input)
+  )
 
   ipcMain.handle(IPC.saveExerciseCode, (_event, exerciseId: string, code: string) => {
     db.saveExerciseCode(exerciseId, code)

@@ -28,6 +28,15 @@ export interface Lesson {
   createdAt: string
 }
 
+/** One test case attached to an exercise. The description is always shown to the
+ *  student; the assertion code is hidden (the tutor may reveal it when they're stuck). */
+export interface ExerciseTest {
+  description: string
+  /** JS statements appended after the student's code (same scope). Throws on failure.
+   *  Helpers available: assert(cond, msg) and assertEqual(actual, expected, msg?). */
+  assertion: string
+}
+
 export interface Exercise {
   id: string
   lessonId: string | null
@@ -38,7 +47,24 @@ export interface Exercise {
   starterCode: string
   solutionCode: string | null
   status: 'assigned' | 'attempted' | 'completed'
+  tests: ExerciseTest[]
   createdAt: string
+}
+
+export interface TestCaseResult {
+  description: string
+  passed: boolean
+  message?: string
+}
+
+export interface TestRunResult {
+  kind: 'tests'
+  results: TestCaseResult[]
+  /** Student console output (harness protocol lines stripped). */
+  stdout: string
+  stderr: string
+  timedOut: boolean
+  buildError?: string
 }
 
 /** A persisted whiteboard render — everything the instructor ever wrote on the board. */
@@ -168,6 +194,7 @@ export interface DbApi {
     promptMd: string
     language: string
     starterCode: string
+    tests: ExerciseTest[]
   }): Exercise
   listExercises(): Exercise[]
   getExercise(id: string): Exercise | null
@@ -286,6 +313,12 @@ export interface TutorBridge {
   sendInterviewNudge(sessionId: string, idleSeconds: number, nudgeNumber: number): Promise<void>
   /** Compile/execute exercise code (main process). Stateless — does not persist anything. */
   runCode(input: { language: string; code: string }): Promise<RunResult>
+  /** Run an exercise's test cases against the code (javascript/typescript only). Stateless. */
+  runTests(input: {
+    language: string
+    code: string
+    tests: ExerciseTest[]
+  }): Promise<TestRunResult>
   /** Autosave the editor contents for an exercise (debounced by the caller). */
   saveExerciseCode(exerciseId: string, code: string): Promise<void>
   /** Report a completed run: persists the solution attempt and makes it visible to the instructor. */
@@ -335,6 +368,7 @@ export const IPC = {
   respondScaffold: 'projects:respond-scaffold',
   openProject: 'projects:open',
   runCode: 'exercise:run',
+  runTests: 'exercise:run-tests',
   reportRun: 'exercise:report-run',
   saveExerciseCode: 'exercise:save-code',
   voiceStatus: 'voice:status',

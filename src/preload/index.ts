@@ -26,6 +26,7 @@ const bridge: TutorBridge = {
   deleteSession: (sessionId) => ipcRenderer.invoke(IPC.deleteSession, sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke(IPC.renameSession, sessionId, title),
   runCode: (input) => ipcRenderer.invoke(IPC.runCode, input),
+  runTests: (input) => ipcRenderer.invoke(IPC.runTests, input),
   reportRun: (input) => ipcRenderer.invoke(IPC.reportRun, input),
   saveExerciseCode: (exerciseId, code) => ipcRenderer.invoke(IPC.saveExerciseCode, exerciseId, code),
   voiceStatus: () => ipcRenderer.invoke(IPC.voiceStatus),

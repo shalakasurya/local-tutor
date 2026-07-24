@@ -79,7 +79,33 @@ const clientTools: Anthropic.Tool[] = [
           enum: ['javascript', 'typescript', 'jsx', 'tsx', 'html', 'css'],
           description: 'Language of the starter code'
         },
-        starter_code: { type: 'string', description: 'Starter code the student begins from' }
+        starter_code: { type: 'string', description: 'Starter code the student begins from' },
+        tests: {
+          type: 'array',
+          description:
+            'Test cases (javascript/typescript exercises only — omit for other languages). ' +
+            'Provide 3–6 covering the happy path plus edge cases. Assertions run AFTER the ' +
+            "student's code in the same scope, so they can call the student's functions " +
+            'directly. Helpers available: assert(condition, message) and assertEqual(actual, ' +
+            'expected, message?) — assertEqual compares JSON-serialized values, so prefer ' +
+            'primitives/arrays/plain objects. Descriptions are shown to the student; assertion ' +
+            'code is hidden (you may reveal a failing assertion when they are stuck). The ' +
+            'starter code must declare the function signature the tests call.',
+          items: {
+            type: 'object',
+            properties: {
+              description: {
+                type: 'string',
+                description: 'What this case checks, e.g. "returns [] for empty input"'
+              },
+              assertion: {
+                type: 'string',
+                description: "JS statements that throw on failure, e.g. assertEqual(sum([1,2]), 3)"
+              }
+            },
+            required: ['description', 'assertion']
+          }
+        }
       },
       required: ['title', 'prompt_md', 'language', 'starter_code']
     }
@@ -295,7 +321,13 @@ export async function executeTool(
         title: String(args.title ?? 'Untitled exercise'),
         promptMd: String(args.prompt_md ?? ''),
         language: String(args.language ?? 'javascript'),
-        starterCode: String(args.starter_code ?? '')
+        starterCode: String(args.starter_code ?? ''),
+        tests: Array.isArray(args.tests)
+          ? (args.tests as Array<Record<string, unknown>>).map((t) => ({
+              description: String(t.description ?? ''),
+              assertion: String(t.assertion ?? '')
+            }))
+          : []
       })
       ctx.emit({ type: 'exercise', sessionId: ctx.sessionId, exercise })
       return `Exercise "${exercise.title}" (id ${exercise.id}) is now open in the student's editor pane.`
