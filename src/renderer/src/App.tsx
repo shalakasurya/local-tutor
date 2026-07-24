@@ -13,6 +13,7 @@ import TranscriptPane from './components/TranscriptPane'
 import Composer from './components/Composer'
 import StudyPanel, { type StudyTab, type WhiteboardState } from './components/StudyPanel'
 import ScaffoldModal from './components/ScaffoldModal'
+import NotesView from './components/NotesView'
 import { TtsPlayer } from './lib/ttsPlayer'
 
 /** Payload for a pending scaffold-request approval modal. */
@@ -60,6 +61,8 @@ export default function App(): JSX.Element {
     changes: ChangedFile[]
   } | null>(null)
   const [scaffoldRequest, setScaffoldRequest] = useState<ScaffoldRequestState | null>(null)
+  // Which top-level area is showing in place of the classroom + study panel.
+  const [view, setView] = useState<'classroom' | 'notes'>('classroom')
 
   // The event listener is subscribed once; it reads the active session id from a ref.
   const activeSessionIdRef = useRef<string | null>(null)
@@ -73,6 +76,10 @@ export default function App(): JSX.Element {
   const sessionProjectRef = useRef<{ project: Project; changes: ChangedFile[] } | null>(null)
   // Locally-appended turns get negative ids so they never collide with DB row ids.
   const localIdRef = useRef(-1)
+  // Holds NotesView's listNotes-only refresh callback while it's mounted (registered via
+  // its registerRefresh prop), so the 'notes-updated' event handler can trigger it without
+  // re-subscribing the event listener whenever the notes view opens/closes.
+  const notesRefreshRef = useRef<(() => void) | null>(null)
   // Lazily-created WebAudio player for main-synthesized TTS utterances (see 'tts-audio' below).
   const ttsPlayerRef = useRef<TtsPlayer | null>(null)
   if (ttsPlayerRef.current === null) {
@@ -102,6 +109,8 @@ export default function App(): JSX.Element {
 
   const selectSession = useCallback(async (id: string) => {
     void window.tutor.stopSpeaking()
+    // Selecting a session always returns to the classroom, even if the notes view was open.
+    setView('classroom')
     setActiveSessionId(id)
     activeSessionIdRef.current = id
     setStreaming(false)
@@ -220,6 +229,15 @@ export default function App(): JSX.Element {
           sessionProjectRef.current = next
           setSessionProject(next)
         }
+        return
+      }
+
+      // 'notes-updated' is global (background distillation isn't tied to the active
+      // session) — handled before the session filter, same as 'speaking'. There's no
+      // state to update here beyond nudging NotesView's own refresh (listNotes only —
+      // backfill must not re-run on every event) if it's currently mounted.
+      if (event.type === 'notes-updated') {
+        notesRefreshRef.current?.()
         return
       }
 
@@ -620,73 +638,87 @@ export default function App(): JSX.Element {
         onNewSession={() => void handleNewSession()}
         onDelete={(id) => void handleDeleteSession(id)}
         onRename={handleRenameSession}
+        notesActive={view === 'notes'}
+        onOpenNotes={() => setView('notes')}
       />
 
-      <main className="classroom">
-        {error !== null && (
-          <div className="error-banner" role="alert">
-            <span className="error-banner-text">{error}</span>
-            <button
-              type="button"
-              className="error-banner-dismiss"
-              onClick={() => setError(null)}
-              aria-label="Dismiss error"
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        <TranscriptPane
-          turns={turns}
-          streaming={streaming}
-          streamText={streamText}
-          activity={activity}
-          onTurnClick={handleTurnClick}
-          onReplay={
-            voice?.tts.available === true ? (text) => void window.tutor.speakText(text) : null
-          }
+      {view === 'notes' ? (
+        <NotesView
+          sessions={sessions}
+          onBack={() => setView('classroom')}
+          registerRefresh={(fn) => {
+            notesRefreshRef.current = fn
+          }}
         />
+      ) : (
+        <>
+          <main className="classroom">
+            {error !== null && (
+              <div className="error-banner" role="alert">
+                <span className="error-banner-text">{error}</span>
+                <button
+                  type="button"
+                  className="error-banner-dismiss"
+                  onClick={() => setError(null)}
+                  aria-label="Dismiss error"
+                >
+                  ×
+                </button>
+              </div>
+            )}
 
-        <Composer
-          streaming={streaming}
-          onSend={handleSend}
-          onStop={handleStop}
-          voice={voice}
-          voiceReplies={voiceReplies}
-          onVoiceRepliesChange={setVoiceRepliesState}
-          onStopSpeaking={() => void window.tutor.stopSpeaking()}
-          micMode={micMode}
-          onMicModeChange={setMicModeState}
-          ttsSpeaking={ttsSpeaking}
-          onStudentActivity={markStudentActivity}
-        />
-      </main>
+            <TranscriptPane
+              turns={turns}
+              streaming={streaming}
+              streamText={streamText}
+              activity={activity}
+              onTurnClick={handleTurnClick}
+              onReplay={
+                voice?.tts.available === true ? (text) => void window.tutor.speakText(text) : null
+              }
+            />
 
-      <StudyPanel
-        tab={tab}
-        onTabChange={setTab}
-        whiteboards={whiteboards}
-        whiteboardIndex={whiteboardIndex}
-        onWhiteboardIndexChange={setWhiteboardIndex}
-        exercises={exercises}
-        exerciseIndex={exerciseIndex}
-        onExerciseIndexChange={setExerciseIndex}
-        onCodeSaved={handleExerciseCodeSaved}
-        sessionId={activeSessionId}
-        onStudentMessage={sendStudentMessage}
-        interviews={interviews}
-        selectedInterviewId={selectedInterviewId}
-        onSelectInterview={setSelectedInterviewId}
-        interviewActive={interviewActive}
-        onStudentActivity={markStudentActivity}
-        projects={projects}
-        sessionProject={sessionProject}
-        onAttachProject={() => void handleAttachProject()}
-        onSelectProject={(id) => void handleSelectProject(id)}
-        onProjectPushModeChange={handlePushModeChange}
-        onOpenProject={handleOpenProject}
-      />
+            <Composer
+              streaming={streaming}
+              onSend={handleSend}
+              onStop={handleStop}
+              voice={voice}
+              voiceReplies={voiceReplies}
+              onVoiceRepliesChange={setVoiceRepliesState}
+              onStopSpeaking={() => void window.tutor.stopSpeaking()}
+              micMode={micMode}
+              onMicModeChange={setMicModeState}
+              ttsSpeaking={ttsSpeaking}
+              onStudentActivity={markStudentActivity}
+            />
+          </main>
+
+          <StudyPanel
+            tab={tab}
+            onTabChange={setTab}
+            whiteboards={whiteboards}
+            whiteboardIndex={whiteboardIndex}
+            onWhiteboardIndexChange={setWhiteboardIndex}
+            exercises={exercises}
+            exerciseIndex={exerciseIndex}
+            onExerciseIndexChange={setExerciseIndex}
+            onCodeSaved={handleExerciseCodeSaved}
+            sessionId={activeSessionId}
+            onStudentMessage={sendStudentMessage}
+            interviews={interviews}
+            selectedInterviewId={selectedInterviewId}
+            onSelectInterview={setSelectedInterviewId}
+            interviewActive={interviewActive}
+            onStudentActivity={markStudentActivity}
+            projects={projects}
+            sessionProject={sessionProject}
+            onAttachProject={() => void handleAttachProject()}
+            onSelectProject={(id) => void handleSelectProject(id)}
+            onProjectPushModeChange={handlePushModeChange}
+            onOpenProject={handleOpenProject}
+          />
+        </>
+      )}
 
       {scaffoldRequest !== null && (
         <ScaffoldModal request={scaffoldRequest} onRespond={handleScaffoldRespond} />

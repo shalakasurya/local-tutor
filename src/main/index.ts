@@ -6,6 +6,7 @@ import type { LastRun, TutorEvent } from '../shared/types'
 import { createDb } from './db'
 import { Instructor } from './instructor'
 import { registerIpc } from './ipc'
+import { NotesService } from './notes'
 import { ProjectsService } from './projects'
 import { sttStatus } from './stt'
 import { Speaker } from './tts'
@@ -45,9 +46,15 @@ app.whenReady().then(() => {
   // The speaker notifies the renderer of speaking-state changes directly (no feedback loop).
   const speaker = new Speaker(sendToRenderer)
 
+  const notes = new NotesService(db, sendToRenderer)
+
   const emit = (event: TutorEvent): void => {
     sendToRenderer(event)
     speaker.onTutorEvent(event)
+    // Every completed instructor reply feeds the study notebook (debounced).
+    if (event.type === 'turn-end') {
+      notes.scheduleSync(event.sessionId)
+    }
   }
   const instructor = new Instructor(db, emit, (sessionId) => runStore.get(sessionId) ?? null)
 
@@ -64,7 +71,7 @@ app.whenReady().then(() => {
   instructor.attachProjects(projects)
   projects.startAll()
 
-  registerIpc(db, instructor, runStore, speaker, projects)
+  registerIpc(db, instructor, runStore, speaker, projects, notes)
   createWindow()
 
   app.on('activate', () => {

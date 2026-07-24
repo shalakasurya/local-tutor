@@ -9,6 +9,8 @@ interface SessionSidebarProps {
   onNewSession: () => void
   onDelete: (id: string) => void
   onRename: (id: string, title: string) => void
+  notesActive: boolean
+  onOpenNotes: () => void
 }
 
 function formatRelativeDate(iso: string): string {
@@ -31,7 +33,9 @@ export default function SessionSidebar({
   onSelect,
   onNewSession,
   onDelete,
-  onRename
+  onRename,
+  notesActive,
+  onOpenNotes
 }: SessionSidebarProps): JSX.Element {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -77,6 +81,15 @@ export default function SessionSidebar({
 
       <button type="button" className="new-session-btn" onClick={onNewSession}>
         + New session
+      </button>
+
+      <button
+        type="button"
+        className={notesActive ? 'notes-nav-btn notes-nav-btn-active' : 'notes-nav-btn'}
+        aria-pressed={notesActive}
+        onClick={onOpenNotes}
+      >
+        📓 Notes
       </button>
 
       <nav className="session-list" aria-label="Sessions">

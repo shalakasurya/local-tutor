@@ -76,6 +76,21 @@ export interface WhiteboardSnapshot {
   createdAt: string
 }
 
+// ---------- Study notes (auto-taken, student-editable) ----------
+
+export interface Note {
+  id: string
+  /** Topic section this note belongs to, e.g. "React Hooks". */
+  topic: string
+  contentMd: string
+  /** Session the note was distilled from (null for notes without a source). */
+  sessionId: string | null
+  /** True once the student has edited it — the auto note-taker never touches it either way (append-only). */
+  edited: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 // ---------- Projects (external-editor pair programming) ----------
 
 export interface Project {
@@ -212,6 +227,15 @@ export interface DbApi {
   /** All whiteboard snapshots for a session, oldest first. */
   listWhiteboards(sessionId: string): WhiteboardSnapshot[]
 
+  createNote(input: { topic: string; contentMd: string; sessionId: string | null }): Note
+  listNotes(): Note[]
+  listNoteTopics(): string[]
+  updateNoteContent(id: string, contentMd: string): void
+  deleteNote(id: string): void
+  /** Highest turn id already distilled into notes for a session (0 = none). */
+  getNoteWatermark(sessionId: string): number
+  setNoteWatermark(sessionId: string, turnId: number): void
+
   createProject(input: { name: string; path: string }): Project
   listProjects(): Project[]
   getProject(id: string): Project | null
@@ -263,6 +287,8 @@ export type TutorEvent =
   | { type: 'tts-audio'; sessionId: string; utteranceId: string; wav: ArrayBuffer }
   /** Stop any in-renderer TTS playback immediately. Global — handle before session filtering. */
   | { type: 'tts-stop'; sessionId: string }
+  /** New study notes were distilled. Global — handle before session filtering. */
+  | { type: 'notes-updated'; sessionId: string; created: number }
   | { type: 'interview-started'; sessionId: string; interview: Interview }
   | { type: 'interview-completed'; sessionId: string; interview: Interview }
   /** A project was created (via tutor tool) or attached (via UI) and linked to the session. */
@@ -299,6 +325,13 @@ export interface TutorBridge {
   listProgress(): Promise<ProgressNote[]>
   /** Completed mock-interview reports across all sessions, newest first. */
   listInterviews(): Promise<Interview[]>
+  /** All study notes, every topic. */
+  listNotes(): Promise<Note[]>
+  /** Edit a note's content (marks it as student-edited). */
+  updateNote(noteId: string, contentMd: string): Promise<void>
+  deleteNote(noteId: string): Promise<void>
+  /** Distill notes from any session turns not yet covered (first-open backfill + catch-up). */
+  backfillNotes(): Promise<{ created: number }>
   listProjects(): Promise<Project[]>
   /** Opens the native folder picker and attaches the chosen existing directory as a project linked to the session. Null if cancelled. */
   attachProject(sessionId: string): Promise<Project | null>
@@ -370,6 +403,10 @@ export const IPC = {
   listProgress: 'progress:list',
   listInterviews: 'interviews:list',
   interviewNudge: 'interview:nudge',
+  listNotes: 'notes:list',
+  updateNote: 'notes:update',
+  deleteNote: 'notes:delete',
+  backfillNotes: 'notes:backfill',
   listProjects: 'projects:list',
   attachProject: 'projects:attach',
   linkProject: 'projects:link',

@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import type {
   DbApi,
   Exercise,
+  Note,
   Project,
   Interview,
   InterviewScore,
@@ -57,6 +58,28 @@ interface ProgressRow {
   mastery: ProgressNote['mastery']
   note: string
   created_at: string
+}
+
+interface NoteRow {
+  id: string
+  topic: string
+  content_md: string
+  session_id: string | null
+  edited: number
+  created_at: string
+  updated_at: string
+}
+
+function toNote(row: NoteRow): Note {
+  return {
+    id: row.id,
+    topic: row.topic,
+    contentMd: row.content_md,
+    sessionId: row.session_id,
+    edited: row.edited === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }
 }
 
 interface ProjectRow {
@@ -240,6 +263,19 @@ export function createDb(dbPath: string): DbApi {
       scores TEXT NOT NULL,
       report_md TEXT
     );
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY,
+      topic TEXT NOT NULL,
+      content_md TEXT NOT NULL,
+      session_id TEXT,
+      edited INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS note_watermarks (
+      session_id TEXT PRIMARY KEY,
+      last_turn_id INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS progress (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       topic TEXT NOT NULL,
@@ -339,6 +375,20 @@ export function createDb(dbPath: string): DbApi {
   const selectInterviews = db.prepare(
     "SELECT * FROM interviews WHERE status = 'completed' ORDER BY completed_at DESC"
   )
+
+  const insertNote = db.prepare(`
+    INSERT INTO notes (id, topic, content_md, session_id, edited, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 0, ?, ?)
+  `)
+  const selectNotes = db.prepare('SELECT * FROM notes ORDER BY topic COLLATE NOCASE ASC, created_at ASC')
+  const selectNoteTopics = db.prepare('SELECT DISTINCT topic FROM notes ORDER BY topic COLLATE NOCASE ASC')
+  const updateNoteStmt = db.prepare('UPDATE notes SET content_md = ?, edited = 1, updated_at = ? WHERE id = ?')
+  const deleteNoteStmt = db.prepare('DELETE FROM notes WHERE id = ?')
+  const selectWatermark = db.prepare('SELECT last_turn_id FROM note_watermarks WHERE session_id = ?')
+  const upsertWatermark = db.prepare(`
+    INSERT INTO note_watermarks (session_id, last_turn_id) VALUES (?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET last_turn_id = excluded.last_turn_id
+  `)
 
   const insertProgress = db.prepare(
     'INSERT INTO progress (topic, mastery, note, created_at) VALUES (?, ?, ?, ?)'
@@ -521,6 +571,46 @@ export function createDb(dbPath: string): DbApi {
 
     updateExerciseSolution(id, code, status) {
       updateExerciseSolutionStmt.run(code, status, id)
+    },
+
+    createNote(input) {
+      const now = new Date().toISOString()
+      const note: Note = {
+        id: randomUUID(),
+        topic: input.topic,
+        contentMd: input.contentMd,
+        sessionId: input.sessionId,
+        edited: false,
+        createdAt: now,
+        updatedAt: now
+      }
+      insertNote.run(note.id, note.topic, note.contentMd, note.sessionId, now, now)
+      return note
+    },
+
+    listNotes() {
+      return (selectNotes.all() as NoteRow[]).map(toNote)
+    },
+
+    listNoteTopics() {
+      return (selectNoteTopics.all() as Array<{ topic: string }>).map((r) => r.topic)
+    },
+
+    updateNoteContent(id, contentMd) {
+      updateNoteStmt.run(contentMd, new Date().toISOString(), id)
+    },
+
+    deleteNote(id) {
+      deleteNoteStmt.run(id)
+    },
+
+    getNoteWatermark(sessionId) {
+      const row = selectWatermark.get(sessionId) as { last_turn_id: number } | undefined
+      return row ? row.last_turn_id : 0
+    },
+
+    setNoteWatermark(sessionId, turnId) {
+      upsertWatermark.run(sessionId, turnId)
     },
 
     createProject(input) {

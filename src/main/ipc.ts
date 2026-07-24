@@ -2,6 +2,7 @@ import { ipcMain, systemPreferences } from 'electron'
 import { IPC } from '../shared/types'
 import type { DbApi, ExerciseTest, LastRun, Project } from '../shared/types'
 import type { Instructor } from './instructor'
+import type { NotesService } from './notes'
 import type { ProjectsService } from './projects'
 import { runCode, runTests } from './runner'
 import { sttStatus, transcribe } from './stt'
@@ -12,7 +13,8 @@ export function registerIpc(
   instructor: Instructor,
   runStore: Map<string, LastRun>,
   speaker: Speaker,
-  projects: ProjectsService
+  projects: ProjectsService,
+  notes: NotesService
 ): void {
   ipcMain.handle(IPC.send, (_event, sessionId: string, text: string) => {
     // Fire and forget — progress streams back to the renderer as TutorEvents.
@@ -38,6 +40,18 @@ export function registerIpc(
   ipcMain.handle(IPC.listProgress, () => db.listProgress())
 
   ipcMain.handle(IPC.listInterviews, () => db.listInterviews())
+
+  ipcMain.handle(IPC.listNotes, () => db.listNotes())
+
+  ipcMain.handle(IPC.updateNote, (_event, noteId: string, contentMd: string) => {
+    db.updateNoteContent(noteId, String(contentMd))
+  })
+
+  ipcMain.handle(IPC.deleteNote, (_event, noteId: string) => {
+    db.deleteNote(noteId)
+  })
+
+  ipcMain.handle(IPC.backfillNotes, () => notes.backfillAll())
 
   ipcMain.handle(IPC.listProjects, () => db.listProjects())
 
