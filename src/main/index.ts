@@ -13,6 +13,8 @@ import { Speaker } from './tts'
 
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
+/** Runs whenever a window becomes ready (launch or reopen) — the teacher greets returning students. */
+let windowReadyHook: (() => void) | null = null
 
 function createWindow(onReady?: () => void): void {
   if (win && !win.isDestroyed()) {
@@ -40,10 +42,10 @@ function createWindow(onReady?: () => void): void {
   })
   app.dock?.show()
 
-  if (onReady) {
-    // Give the renderer a beat after load to mount and subscribe to events.
-    win.webContents.once('did-finish-load', () => setTimeout(onReady, 1500))
-  }
+  // Give the renderer a beat after load to mount and subscribe to events, then
+  // run the explicit callback or the standard window-ready hook (review greet).
+  const ready = onReady ?? ((): void => windowReadyHook?.())
+  win.webContents.once('did-finish-load', () => setTimeout(ready, 1500))
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -100,7 +102,8 @@ app.whenReady().then(() => {
   // deck to the forefront at the moment the tutor speaks.
   const REVIEW_CHECK_MS = 15 * 60_000
   const REVIEW_THROTTLE_MS = 60 * 60_000
-  const BOOT_THROTTLE_MS = 10 * 60_000
+  // Only guards automated relaunch loops — any human reopen re-prompts.
+  const BOOT_THROTTLE_MS = 15_000
   const NOTIFY_THROTTLE_MS = 2 * 3600_000
 
   const updateTray = (dueCount: number): void => {
@@ -177,7 +180,9 @@ app.whenReady().then(() => {
   )
   updateTray(db.listDueFlashcards(new Date().toISOString()).length)
 
-  setTimeout(() => checkReviews('boot'), 6_000) // right after the window is up
+  // Every window appearance (launch, reopen from tray/Dock) greets with the
+  // review check — a teacher acknowledges the student walking back in.
+  windowReadyHook = () => checkReviews('boot')
   setInterval(() => checkReviews('interval'), REVIEW_CHECK_MS)
 
   // One-time conversion of pre-flashcard notes into cards (flagged per session).
