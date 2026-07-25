@@ -89,6 +89,7 @@
         "from": "models/ggml-base.en.bin",
         "to": "models/ggml-base.en.bin"
       }
-    ]
+    ],
+    "afterPack": "scripts/adhoc-sign.cjs"
   }
 }

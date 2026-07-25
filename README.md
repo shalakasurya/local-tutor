@@ -16,7 +16,13 @@ An Anthropic API key is required (`.env`, exported in your shell, or an `ant aut
 
 ## Install as an app
 
-**Download:** grab the latest DMG from [Releases](https://github.com/shalakasurya/local-tutor/releases), open it, and drag **Local Tutor** to Applications (unsigned build — right-click → Open the first time). Apple Silicon only.
+**Download:** grab the latest DMG from [Releases](https://github.com/shalakasurya/local-tutor/releases), open it, and drag **Local Tutor** to Applications. Apple Silicon only.
+
+The build is not notarized by Apple, so the first launch is blocked with an "unidentified developer" warning: right-click the app → **Open** → **Open**, or go to **System Settings → Privacy & Security** and click **Open Anyway**. If macOS instead says the app **"is damaged"** (older downloads), clear the quarantine flag and it will open normally:
+
+```sh
+xattr -cr "/Applications/Local Tutor.app"
+```
 
 Or build it yourself:
 
@@ -24,7 +30,7 @@ Or build it yourself:
 npm run dist   # builds dist/Local Tutor-<version>-arm64.dmg (+ .zip)
 ```
 
-Open the DMG and drag **Local Tutor** to Applications. The packaged app reads its config from `~/Library/Application Support/local-tutor/.env` (same keys as the dev `.env`) and shares that directory with dev builds — sessions, notes, and flashcards carry over. **Voice works out of the box** — a static whisper binary and the base.en model are bundled. Builds are unsigned: on a different Mac, right-click → Open the first time to pass Gatekeeper.
+Open the DMG and drag **Local Tutor** to Applications. The packaged app reads its config from `~/Library/Application Support/local-tutor/.env` (same keys as the dev `.env`) and shares that directory with dev builds — sessions, notes, and flashcards carry over. **Voice works out of the box** — a static whisper binary and the base.en model are bundled. Builds are ad-hoc signed (not notarized): on a different Mac, use right-click → Open the first time to pass Gatekeeper.
 
 Optional voice setup (speech-to-text):
 
