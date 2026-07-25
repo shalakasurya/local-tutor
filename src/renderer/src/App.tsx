@@ -661,9 +661,12 @@ export default function App(): JSX.Element {
     window.tutor.setVoiceReplies(voiceReplies && ttsAvailable).catch(() => {})
   }, [voiceReplies, voice])
 
-  // Persist the hands-free mic mode preference.
+  // Persist the hands-free mic mode preference, and tell main whether the open
+  // mic is live: open → TTS routes through the renderer for echo cancellation
+  // (barge-in); closed → direct playback, which starts instantly.
   useEffect(() => {
     localStorage.setItem('micMode', micMode)
+    window.tutor.setMicOpen(micMode === 'open').catch(() => {})
   }, [micMode])
 
   return (

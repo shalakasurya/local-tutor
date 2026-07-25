@@ -429,6 +429,11 @@ export interface TutorBridge {
   speakText(text: string): Promise<void>
   /** Notify main that a tts-audio utterance finished (or failed) playing. */
   ttsPlaybackEnded(utteranceId: string): Promise<void>
+  /**
+   * Tell main whether the hands-free open mic is live. Open → TTS routes through
+   * the renderer for echo cancellation (barge-in); closed → direct playback (instant).
+   */
+  setMicOpen(open: boolean): Promise<void>
   /** Subscribe to tutor events. Returns an unsubscribe function. */
   onEvent(listener: (event: TutorEvent) => void): () => void
 }
@@ -473,6 +478,7 @@ export const IPC = {
   stopSpeaking: 'voice:stop-speaking',
   speakText: 'voice:speak',
   ttsEnded: 'voice:tts-ended',
+  micOpen: 'voice:mic-open',
   /** main -> renderer event channel; payload is a TutorEvent */
   event: 'tutor:event'
 } as const

@@ -169,4 +169,6 @@ export function registerIpc(
   ipcMain.handle(IPC.ttsEnded, (_event, utteranceId: string) =>
     speaker.playbackEnded(String(utteranceId))
   )
+
+  ipcMain.handle(IPC.micOpen, (_event, open: boolean) => speaker.setMicOpen(Boolean(open)))
 }
