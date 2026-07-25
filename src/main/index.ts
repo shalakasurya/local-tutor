@@ -1,4 +1,4 @@
-import 'dotenv/config'
+import './env'
 import { app, BrowserWindow, Menu, Notification, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import { IPC } from '../shared/types'

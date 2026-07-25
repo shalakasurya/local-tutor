@@ -283,7 +283,9 @@ export async function runCode(input: { language: string; code: string }): Promis
           stdin: {
             contents: code,
             loader: language,
-            resolveDir: app.getAppPath()
+            // In packaged builds react/react-dom are asar-unpacked (esbuild's
+            // spawned binary can't read inside asar archives).
+            resolveDir: app.getAppPath().replace('app.asar', 'app.asar.unpacked')
           },
           bundle: true,
           write: false,

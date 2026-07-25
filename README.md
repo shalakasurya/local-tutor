@@ -14,6 +14,14 @@ npm run dev
 
 An Anthropic API key is required (`.env`, exported in your shell, or an `ant auth login` profile).
 
+## Install as an app
+
+```sh
+npm run dist   # builds dist/Local Tutor-<version>-arm64.dmg (+ .zip)
+```
+
+Open the DMG and drag **Local Tutor** to Applications. The packaged app reads its config from `~/Library/Application Support/local-tutor/.env` (same keys as the dev `.env`) and shares that directory with dev builds — sessions, notes, and flashcards carry over. The whisper model belongs in `~/Library/Application Support/local-tutor/models/ggml-base.en.bin` for packaged use (or set `WHISPER_MODEL`). Builds are unsigned: on a different Mac, right-click → Open the first time to pass Gatekeeper.
+
 Optional voice setup (speech-to-text):
 
 ```sh

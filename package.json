@@ -9,7 +9,8 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/renderer/tsconfig.json",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
-    "setup:voice": "bash scripts/setup-voice.sh"
+    "setup:voice": "bash scripts/setup-voice.sh",
+    "dist": "electron-vite build && electron-builder --mac"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
@@ -34,6 +35,50 @@
     "electron": "^33.2.0",
     "electron-vite": "^2.3.0",
     "typescript": "^5.5.4",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.localtutor.app",
+    "productName": "Local Tutor",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "package.json",
+      "node_modules/**"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**",
+      "node_modules/bindings/**",
+      "node_modules/file-uri-to-path/**",
+      "node_modules/esbuild/**",
+      "node_modules/@esbuild/**",
+      "node_modules/react/**",
+      "node_modules/react-dom/**",
+      "node_modules/scheduler/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.education",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Local Tutor uses the microphone for voice conversations with your tutor.",
+        "NSSpeechRecognitionUsageDescription": "Local Tutor transcribes your speech locally with whisper.cpp."
+      }
+    }
   }
 }
