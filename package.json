@@ -1,6 +1,6 @@
 {
   "name": "local-tutor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI-powered tutor for tech interview prep and frontend learning",
   "main": "./out/main/index.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/renderer/tsconfig.json",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "setup:voice": "bash scripts/setup-voice.sh",
-    "dist": "electron-vite build && electron-builder --mac"
+    "dist": "bash scripts/build-whisper.sh && electron-vite build && electron-builder --mac"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
@@ -79,6 +79,16 @@
         "NSMicrophoneUsageDescription": "Local Tutor uses the microphone for voice conversations with your tutor.",
         "NSSpeechRecognitionUsageDescription": "Local Tutor transcribes your speech locally with whisper.cpp."
       }
-    }
+    },
+    "extraResources": [
+      {
+        "from": "vendor/whisper-cli",
+        "to": "bin/whisper-cli"
+      },
+      {
+        "from": "models/ggml-base.en.bin",
+        "to": "models/ggml-base.en.bin"
+      }
+    ]
   }
 }

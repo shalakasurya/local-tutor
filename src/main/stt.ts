@@ -11,6 +11,11 @@ function findBinary(): string | null {
   if (process.env['WHISPER_BIN'] && existsSync(process.env['WHISPER_BIN'])) {
     return process.env['WHISPER_BIN']
   }
+  // Bundled static binary: packaged app Resources, or vendor/ in dev.
+  const bundled = app.isPackaged
+    ? join(process.resourcesPath, 'bin', 'whisper-cli')
+    : join(app.getAppPath(), 'vendor', 'whisper-cli')
+  if (existsSync(bundled)) return bundled
   try {
     const found = execFileSync('/usr/bin/which', ['whisper-cli'], { encoding: 'utf8' }).trim()
     if (found) return found
@@ -30,6 +35,8 @@ function findModel(): string | null {
     return process.env['WHISPER_MODEL']
   }
   const candidates = [
+    // Bundled with the packaged app.
+    join(process.resourcesPath ?? '', 'models', 'ggml-base.en.bin'),
     join(app.getAppPath(), 'models', 'ggml-base.en.bin'),
     join(app.getPath('userData'), 'models', 'ggml-base.en.bin')
   ]
