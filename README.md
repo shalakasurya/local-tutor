@@ -16,6 +16,10 @@ An Anthropic API key is required (`.env`, exported in your shell, or an `ant aut
 
 ## Install as an app
 
+**Download:** grab the latest DMG from [Releases](https://github.com/shalakasurya/local-tutor/releases), open it, and drag **Local Tutor** to Applications (unsigned build — right-click → Open the first time). Apple Silicon only.
+
+Or build it yourself:
+
 ```sh
 npm run dist   # builds dist/Local Tutor-<version>-arm64.dmg (+ .zip)
 ```
