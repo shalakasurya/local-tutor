@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu, Notification, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import { IPC } from '../shared/types'
 import type { LastRun, TutorEvent } from '../shared/types'
@@ -12,8 +12,15 @@ import { sttStatus } from './stt'
 import { Speaker } from './tts'
 
 let win: BrowserWindow | null = null
+let tray: Tray | null = null
 
-function createWindow(): void {
+function createWindow(onReady?: () => void): void {
+  if (win && !win.isDestroyed()) {
+    win.show()
+    win.focus()
+    onReady?.()
+    return
+  }
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -25,6 +32,18 @@ function createWindow(): void {
       sandbox: false
     }
   })
+
+  // Menu-bar-app behavior: window closed → out of the Dock, alive in the tray.
+  win.on('closed', () => {
+    win = null
+    if (tray) app.dock?.hide()
+  })
+  app.dock?.show()
+
+  if (onReady) {
+    // Give the renderer a beat after load to mount and subscribe to events.
+    win.webContents.once('did-finish-load', () => setTimeout(onReady, 1500))
+  }
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -82,12 +101,17 @@ app.whenReady().then(() => {
   const REVIEW_CHECK_MS = 15 * 60_000
   const REVIEW_THROTTLE_MS = 60 * 60_000
   const BOOT_THROTTLE_MS = 10 * 60_000
-  const checkReviews = (boot: boolean): void => {
-    const due = db.listDueFlashcards(new Date().toISOString())
-    sendToRenderer({ type: 'review-due', sessionId: '', dueCount: due.length })
-    if (due.length === 0) return
-    const last = Number(db.getMeta('last_review_reminder') ?? 0)
-    if (Date.now() - last < (boot ? BOOT_THROTTLE_MS : REVIEW_THROTTLE_MS)) return
+  const NOTIFY_THROTTLE_MS = 2 * 3600_000
+
+  const updateTray = (dueCount: number): void => {
+    tray?.setTitle(dueCount > 0 ? ` 🎓 ${dueCount}` : ' 🎓')
+    tray?.setToolTip(
+      dueCount > 0 ? `Local Tutor — ${dueCount} card(s) due for review` : 'Local Tutor'
+    )
+  }
+
+  /** Spoken, in-app review push (window must be open). */
+  const pushSpokenOffer = (due: ReturnType<typeof db.listDueFlashcards>, boot: boolean): void => {
     const target = db.listSessions()[0]
     if (!target) return
     if (instructor.isBusy(target.id) || db.getActiveInterview(target.id)) return
@@ -108,8 +132,53 @@ app.whenReady().then(() => {
       .catch((err) => console.error(err))
     sendToRenderer({ type: 'review-nudge', sessionId: target.id, dueCount: due.length })
   }
-  setTimeout(() => checkReviews(true), 6_000) // right after the window is up
-  setInterval(() => checkReviews(false), REVIEW_CHECK_MS)
+
+  const checkReviews = (mode: 'boot' | 'interval' | 'forced'): void => {
+    const due = db.listDueFlashcards(new Date().toISOString())
+    sendToRenderer({ type: 'review-due', sessionId: '', dueCount: due.length })
+    updateTray(due.length)
+    if (due.length === 0) return
+
+    const windowOpen = win !== null && !win.isDestroyed()
+    if (windowOpen) {
+      const last = Number(db.getMeta('last_review_reminder') ?? 0)
+      const throttle =
+        mode === 'forced' ? 0 : mode === 'boot' ? BOOT_THROTTLE_MS : REVIEW_THROTTLE_MS
+      if (Date.now() - last < throttle) return
+      pushSpokenOffer(due, mode !== 'interval')
+      return
+    }
+
+    // Window closed, app living in the menu bar: reach the student via a
+    // system notification instead of speaking into the void.
+    const lastNotify = Number(db.getMeta('last_review_notification') ?? 0)
+    if (mode !== 'forced' && Date.now() - lastNotify < NOTIFY_THROTTLE_MS) return
+    if (!Notification.isSupported()) return
+    db.setMeta('last_review_notification', String(Date.now()))
+    const notification = new Notification({
+      title: `${due.length} card(s) due for review`,
+      body: 'Cil is waiting — a few minutes now beats relearning later.'
+    })
+    notification.on('click', () => {
+      createWindow(() => checkReviews('forced'))
+    })
+    notification.show()
+  }
+
+  // Menu-bar residency: the teacher stays on duty after the window closes.
+  tray = new Tray(nativeImage.createEmpty())
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open Local Tutor', click: () => createWindow() },
+      { label: 'Review now', click: () => createWindow(() => checkReviews('forced')) },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() }
+    ])
+  )
+  updateTray(db.listDueFlashcards(new Date().toISOString()).length)
+
+  setTimeout(() => checkReviews('boot'), 6_000) // right after the window is up
+  setInterval(() => checkReviews('interval'), REVIEW_CHECK_MS)
 
   // One-time conversion of pre-flashcard notes into cards (flagged per session).
   setTimeout(() => {
