@@ -332,6 +332,8 @@ export type TutorEvent =
   | { type: 'notes-updated'; sessionId: string; created: number }
   /** Due-flashcard count changed (cards created or graded). Global — handle before session filtering. */
   | { type: 'review-due'; sessionId: string; dueCount: number }
+  /** The tutor is actively offering a review — bring the Library/review deck to the forefront. Global. */
+  | { type: 'review-nudge'; sessionId: string; dueCount: number }
   | { type: 'interview-started'; sessionId: string; interview: Interview }
   | { type: 'interview-completed'; sessionId: string; interview: Interview }
   /** A project was created (via tutor tool) or attached (via UI) and linked to the session. */

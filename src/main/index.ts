@@ -74,33 +74,42 @@ app.whenReady().then(() => {
   registerIpc(db, instructor, runStore, speaker, projects, notes)
   createWindow()
 
-  // ---- Review reminders: the teacher surfaces due flashcards on time ----
-  const REVIEW_CHECK_MS = 30 * 60_000
-  const REVIEW_THROTTLE_MS = 4 * 3600_000
-  const checkReviews = (): void => {
+  // ---- Review reminders: the teacher pushes, like a real teacher ----
+  // Boot: speak up almost immediately when cards are due (tiny throttle only to
+  // survive rapid dev restarts). Recurring: check every 15 min, remind at most
+  // hourly. The renderer also gets a review-nudge event to bring the Library
+  // deck to the forefront at the moment the tutor speaks.
+  const REVIEW_CHECK_MS = 15 * 60_000
+  const REVIEW_THROTTLE_MS = 60 * 60_000
+  const BOOT_THROTTLE_MS = 10 * 60_000
+  const checkReviews = (boot: boolean): void => {
     const due = db.listDueFlashcards(new Date().toISOString())
     sendToRenderer({ type: 'review-due', sessionId: '', dueCount: due.length })
     if (due.length === 0) return
     const last = Number(db.getMeta('last_review_reminder') ?? 0)
-    if (Date.now() - last < REVIEW_THROTTLE_MS) return
+    if (Date.now() - last < (boot ? BOOT_THROTTLE_MS : REVIEW_THROTTLE_MS)) return
     const target = db.listSessions()[0]
     if (!target) return
     if (instructor.isBusy(target.id) || db.getActiveInterview(target.id)) return
     db.setMeta('last_review_reminder', String(Date.now()))
     const topics = [...new Set(due.map((c) => c.topic))].slice(0, 5).join(', ')
+    const hasRetries = due.some((c) => c.lastGrade === 'again')
+    const framing = boot
+      ? hasRetries
+        ? `The student just reopened the app with an UNFINISHED review — ${due.length} card(s) due, some of them retries they got wrong last time. Greet them and push to pick the review back up right away — a real teacher would not let this slide.`
+        : `The student just opened the app and has ${due.length} flashcard(s) due (topics: ${topics}). Greet them briefly and push for the review NOW, before new material — friendly but insistent, the way a good teacher starts class with recap.`
+      : `The student has ${due.length} flashcard(s) due for review (topics: ${topics}). Push for a quick review session out loud — friendly but insistent; suggest it will only take a few minutes.`
     instructor
       .handleStudentMessage(
         target.id,
-        `The student has ${due.length} flashcard(s) due for review (topics: ${topics}). As their teacher, ` +
-          `briefly and warmly offer a quick review session out loud — one or two sentences, no pressure. ` +
-          `If they agree, run the review per your flashcard instructions; if they decline or seem ` +
-          `mid-task, let it go gracefully. Do not mention this reminder.`,
+        `${framing} If they agree, run the review per your flashcard instructions. If they explicitly decline, accept it gracefully and move on. Do not mention this reminder.`,
         { hidden: true }
       )
       .catch((err) => console.error(err))
+    sendToRenderer({ type: 'review-nudge', sessionId: target.id, dueCount: due.length })
   }
-  setTimeout(checkReviews, 20_000) // shortly after launch, once the window is up
-  setInterval(checkReviews, REVIEW_CHECK_MS)
+  setTimeout(() => checkReviews(true), 6_000) // right after the window is up
+  setInterval(() => checkReviews(false), REVIEW_CHECK_MS)
 
   // One-time conversion of pre-flashcard notes into cards (flagged per session).
   setTimeout(() => {

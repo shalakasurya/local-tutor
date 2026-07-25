@@ -257,6 +257,16 @@ export default function App(): JSX.Element {
         return
       }
 
+      // 'review-nudge': the tutor is actively offering a review — put the deck
+      // in the student's face: back to the classroom, Library tab up front
+      // (LibraryPane opens on its Review section whenever cards are due).
+      if (event.type === 'review-nudge') {
+        setReviewDueCount(event.dueCount)
+        setView('classroom')
+        setTab('library')
+        return
+      }
+
       // 'scaffold-request' must never be missed even if it arrives for a session
       // that isn't currently active, so it's handled before the session filter too.
       if (event.type === 'scaffold-request') {
