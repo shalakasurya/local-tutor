@@ -14,7 +14,8 @@ const KIND_LABELS: Record<string, string> = {
   behavioral: 'Behavioral',
   coding: 'Coding',
   frontend_concepts: 'Frontend concepts',
-  system_design: 'System design'
+  system_design: 'System design',
+  devops: 'DevOps'
 }
 
 function friendlyKind(kind: string): string {

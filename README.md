@@ -1,6 +1,6 @@
 # Local Tutor
 
-An AI-powered, voice-enabled tutor for tech interview prep and learning frontend development (React, TypeScript, Node.js), Next.js, and building AI/LLM-powered applications. It simulates a live one-on-one class: the instructor speaks in short conversational turns, writes detail on a whiteboard, researches current material on the web, assigns runnable exercises with real test cases, runs mock interviews, pair-programs with you in your own editor, and tracks your progress — everything stored locally in SQLite.
+An AI-powered, voice-enabled tutor for tech interview prep and learning frontend development (React, TypeScript, Node.js), Next.js, building AI/LLM-powered applications, and DevOps/infrastructure (containers, Kubernetes, CI/CD, deployment). It simulates a live one-on-one class: the instructor speaks in short conversational turns, writes detail on a whiteboard, researches current material on the web, assigns runnable exercises with real test cases, runs mock interviews, pair-programs with you in your own editor, and tracks your progress — everything stored locally in SQLite.
 
 Built with Electron + React + TypeScript, powered by the Claude API. Voice is fully local (whisper.cpp + macOS speech) — no cloud audio services.
 
@@ -59,7 +59,7 @@ npm run setup:voice   # installs whisper-cpp (Homebrew) + downloads the base.en 
 - All voice is local: whisper.cpp for transcription, macOS `say` for speech. Background-noise hallucinations are filtered; ⌥Space mutes the open mic.
 
 ### Mock interviews
-- Ask for a mock interview (behavioral, coding, frontend concepts, or system design; junior/mid/senior). The tutor switches to a realistic **interviewer persona**: one question at a time, probing follow-ups, hints only reluctantly, coding questions in the REPL.
+- Ask for a mock interview (behavioral, coding, frontend concepts, system design, or DevOps; junior/mid/senior). The tutor switches to a realistic **interviewer persona**: one question at a time, probing follow-ups, hints only reluctantly, coding questions in the REPL.
 - **Coach-like check-ins** — if you go silent (~25s), the interviewer speaks up naturally ("want to talk me through your approach?"), escalating toward a hint or moving on; working in the editor counts as activity, so it never interrupts real thinking.
 - **Scored reports** — overall 0–100 plus per-dimension scores with written justification and per-question notes. The **Interviews tab** keeps every report (current session by default; all sessions one toggle away) so you can track improvement.
 

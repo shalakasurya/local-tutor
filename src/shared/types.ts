@@ -143,7 +143,7 @@ export interface InterviewScore {
 export interface Interview {
   id: string
   sessionId: string | null
-  kind: string // behavioral | coding | frontend_concepts | system_design
+  kind: string // behavioral | coding | frontend_concepts | system_design | devops
   level: string // junior | mid | senior
   status: 'in_progress' | 'completed' | 'abandoned'
   startedAt: string

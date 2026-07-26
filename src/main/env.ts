@@ -7,7 +7,12 @@ import { join } from 'path'
 
 // Keep one data directory across dev and packaged builds (packaged apps would
 // otherwise derive it from productName and orphan the dev data).
-app.setPath('userData', join(app.getPath('appData'), 'local-tutor'))
+// TUTOR_USERDATA points boots at a scratch directory — automated smoke tests
+// must set it so they never touch (or speak into) the real student database.
+app.setPath(
+  'userData',
+  process.env['TUTOR_USERDATA'] ?? join(app.getPath('appData'), 'local-tutor')
+)
 
 // Dev: .env in the project cwd. Packaged: .env in the user data directory
 // (~/Library/Application Support/local-tutor/.env). Both are optional; the

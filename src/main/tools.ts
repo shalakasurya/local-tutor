@@ -202,12 +202,13 @@ const clientTools: Anthropic.Tool[] = [
       properties: {
         kind: {
           type: 'string',
-          enum: ['behavioral', 'coding', 'frontend_concepts', 'system_design']
+          enum: ['behavioral', 'coding', 'frontend_concepts', 'system_design', 'devops']
         },
         level: { type: 'string', enum: ['junior', 'mid', 'senior'] },
         focus: {
           type: 'string',
-          description: 'Optional focus area, e.g. "React", "CSS layout", "a startup-style loop"'
+          description:
+            'Optional focus area, e.g. "React", "CSS layout", "Kubernetes networking", "a startup-style loop"'
         }
       },
       required: ['kind', 'level']
